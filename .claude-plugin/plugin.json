@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "bmox",
   "displayName": "Build My Own X",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Learning-first harness for understanding your daily tech stack (Kafka, Redis, ...). Plans a gap-driven roadmap from what you already know, then teaches each step by building it, tracing the real source, or breaking the real system — enforcing a predict-before-you-look contract with a script-managed state lifecycle.",
   "author": { "name": "build-my-own-x" },
   "license": "MIT",

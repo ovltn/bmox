@@ -3,6 +3,62 @@
 One section per released version, newest first. Format and versioning rules
 are in [AGENTS.md](AGENTS.md).
 
+## [0.4.0] — 2026-08-19
+
+### Added
+
+- `state.py mark-observed` runs `make test` for a build step and refuses on a
+  non-zero exit, so whether the tests passed is no longer the model's claim to
+  make. A project with no Makefile is refused rather than passed over.
+- The build commitment template carries a `What actually happened` section, and
+  `mark-observed` refuses a build step whose entry for this step leaves it
+  unfilled. Green tests say the code works and nothing about the prediction.
+- `state.py profile show` reports what stands behind each concept: hints taken,
+  a bypassed reconcile gate, an answer that only ever came from calibration, and
+  the projects a concept has been met in.
+- `/bmox:check` names what the real system does at this step during close-out,
+  once the prediction has been committed and reconciled.
+
+### Changed
+
+- `record-commitment` reads the template's blanks from the whole prediction
+  rather than from the lines the learner added, so a blank left standing refuses
+  the commitment whoever wrote it, while the sections recording what reality did
+  are read around until `observed`.
+- `record-commitment` weighs an addition on what it says rather than on how the
+  file grew, so answering a blank in fewer characters than the question took
+  clears the gate, and a prediction that is merely thin is told so.
+- A build step open at the moment of upgrading needs
+  `### What actually happened` added to its `DESIGN.md` entry before
+  `mark-observed` will pass; nothing else in flight is affected.
+- `state.py record-evidence` refuses until the step reaches `observed`: an entry
+  written earlier carries the hint count as it stood then, leaving a hinted step
+  reading as an unhinted solve.
+- `complete-step --force` marks every evidence entry the step wrote as
+  gate-bypassed, so `profile show` stops presenting it as a clean solve.
+- `profile show` reports the sequence of outcomes a concept has been graded
+  rather than the strongest one it ever reached.
+- `contract.md` governs what the agent may never *say* as well as what it may
+  never write, the navigator rule binds from the moment a step opens rather than
+  from the moment reality unlocks, and the override procedure names `skip-step`
+  in the phase where `record-hint` can record nothing.
+- Agent-written tests assert observable behavior rather than a chosen structure,
+  which for a parser or a protocol is the design the step exists to force.
+- `ROADMAP.md` carries no account of what the real system does at each step, and
+  probe and operate step titles name the question rather than the mechanism.
+- The mode heuristic reads "no schema for the concept" rather than "absent from
+  the profile", which calibration makes untrue after the first plan.
+- An operate step's injection has to be able to falsify each blank of the
+  hypothesis, and probe coordinates carry the commit a tag points at.
+- `RESOURCES.md` tells the learner not to open a link before the step that needs
+  it.
+
+### Internal
+
+- pytest coverage for build's machine gate, a blank left standing in the
+  baseline, a blank filled in place, the evidence phase guard, and the bypass
+  marker reaching the profile.
+
 ## [0.3.0] — 2026-08-19
 
 ### Added
