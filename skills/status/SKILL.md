@@ -28,16 +28,25 @@ something to read is a record that gets avoided.
 
 ## Then the profile — the part that outlives the project
 
-- **Concepts by evidence count**, heaviest first. This is what the learner has
-  actually demonstrated, as opposed to what they have sat through.
+- **Concepts by evidence count**, heaviest first, each with the sequence of
+  outcomes it has been graded. Read the indented lines with it and say what they
+  say: hints taken, a bypassed reconcile gate, a concept answered in calibration
+  and never demonstrated since. The outcome alone is what the learner *reached*;
+  those lines are what it cost, and a reconciled concept that cost a tier-3 hint
+  is not the same claim as one that cost nothing.
 - **Open gaps**, each with the concept it sits on. `/bmox:plan` aims the next
   roadmap at these, so reading them out here is the learner's chance to argue
   with one before it steers weeks of work.
-- **Concepts seen in more than one technology.** Every evidence entry records
-  the project it came from; a concept carrying two distinct projects has been
-  met twice in different clothes. That is the transfer story, and it is the
-  only thing in the file that shows the learning generalized rather than
-  accumulated. Say so when it happens — it is the return on the whole exercise.
+- **Concepts seen in more than one technology.** `profile show` names them under
+  the concept: a concept carrying two distinct projects has been met twice in
+  different clothes. That is the transfer story, and it is the only thing in the
+  file that shows the learning generalized rather than accumulated. Say so when
+  it happens — it is the return on the whole exercise.
+
+  It undercounts, and say that too when it is relevant: a concept the last plan
+  correctly declined to re-calibrate carries evidence from one project only, so
+  the clearest transfers — the ones that deleted a step from the second roadmap —
+  are exactly the ones this line cannot see.
 
 ## Bounds
 

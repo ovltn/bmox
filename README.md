@@ -13,7 +13,7 @@ real system and break it) — based on what your knowledge profile says you
 already know. Whatever the mode, the agent supplies scaffolding — tests, a
 trace skeleton, a chaos environment — and never the thing you're there to
 produce: an implementation, a trace answer, or a failure hypothesis. Full
-rules for what the agent may and may never write are in
+rules for what the agent may and may never write or say are in
 [`references/contract.md`](references/contract.md). Bypasses are allowed —
 it's your repo — but recorded forever.
 
@@ -64,9 +64,16 @@ planned → ready → predicted → observed → explained → done
 Reality — green tests, the real source, the live system — stays locked until
 your prediction is on record: `record-commitment` refuses to advance a step
 from `ready` to `predicted` until the commitment artifact has gained 400
-non-whitespace characters of prose that is not the template's own blanks, not
-one repeated character, and not a paragraph carried forward from an earlier
-step — so there's always a written, falsifiable claim before you look.
+non-whitespace characters of prose that is not one repeated character and not a
+paragraph carried forward from an earlier step, and until no blank the template
+asked you to fill is still standing — whether or not you were the one who wrote
+it. Blanks that record what reality *did* are due later and wait for it. So
+there's always a written, falsifiable claim before you look.
+
+Getting out of `predicted` is gated too, per mode: `make test` has to actually
+exit zero for a build step, a probe's trace needs every hop held against what
+you predicted, and an operate runbook needs an observation recorded against
+every blank in its hypothesis. All three run in the script, not in the prompt.
 
 Stored in **your repo**, mutated only by `scripts/state.py`: `.bmox/state.json`
 holds project and step progress, `.bmox/profile.json` holds what you've
@@ -96,12 +103,20 @@ CHANGELOG.md                      # what each release changed
 - State transitions live in a script, not in prompts, because prompt
   discipline degrades over long sessions and model updates; `argparse` does
   not. The model is instructed to treat script refusals as correct.
-- The reveal gate — the byte-growth check in `record-commitment` — lives in
+- The reveal gate — the content check in `record-commitment` — lives in
   the same script for the same reason: a model can be talked into believing a
-  half-written blank counts as a prediction, and a byte count can't be.
+  half-written blank counts as a prediction, and a character count can't be.
+  It weighs what was added rather than how the file grew, so answering a blank
+  in fewer words than the question took costs you nothing.
 - The knowledge profile stores evidence, not scores. A score rots silently and
   can't be argued with; evidence can be re-read months later, and the wrong
   predictions sitting in it are the most useful thing in the file.
+- `profile show` prints the whole sequence of outcomes a concept has been graded
+  rather than the best one, alongside the hints, bypasses and calibration-only
+  answers behind it. Reporting only the best grade reads identically whether a
+  concept was demonstrated or waved through — and `/bmox:plan` drops steps for
+  concepts it reads as reconciled, so the tidier summary is the one that silently
+  drops exactly the material that was never learned.
 - Hint ladders are authored at step-open time (calm) rather than at
   hint-request time (frustrated), so escalation policy isn't negotiated
   in the moment.

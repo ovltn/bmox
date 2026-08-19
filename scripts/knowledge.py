@@ -263,9 +263,29 @@ def add_evidence(profile, concept, outcome, note, source="step",
         "outcome": outcome,
         "date": now(),
         "hints": hints or {"tier1": 0, "tier2": 0, "tier3": 0},
+        "bypassed": False,
         "note": note,
     })
     return key
+
+
+def mark_bypassed(profile, project, step) -> int:
+    """Flag every evidence entry this step wrote, returning how many were flagged.
+
+    Run after the fact rather than at record-evidence time because the ordering
+    /bmox:check follows writes the profile *before* closing the step, so at the
+    moment the entry is created nobody has decided yet whether the reconcile gate
+    will be bypassed. Without this the profile's strongest claim — a concept
+    reconciled — reads identically whether the learner explained it or walked
+    past the gate that asks them to.
+    """
+    flagged = 0
+    for c in profile.get("concepts", {}).values():
+        for e in c.get("evidence", []):
+            if e.get("project") == project and e.get("step") == step:
+                e["bypassed"] = True
+                flagged += 1
+    return flagged
 
 
 def _next_gap_number(gaps: list) -> int:

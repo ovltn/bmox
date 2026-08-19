@@ -50,10 +50,19 @@ you to withhold, and what to say when the learner pushes for it anyway, is in
 
 | Situation | Recommend |
 |---|---|
-| Concept absent from the profile | **probe** — do not build what there is no schema for |
-| Concept shaky, or reconciled once, and it is a *mechanism* | **build** — problem solving is now the higher-yield move |
+| No schema for the concept: absent from the profile, or present only as a wrong answer — graded `none`, or carrying an open gap | **probe** — do not build what there is no schema for |
+| Demonstrated by a step and shaky only at the edges, and it is a *mechanism* | **build** — problem solving is now the higher-yield move |
 | Goal is operational, or the concept is behavior-under-failure | **operate** |
 | The same mode has been recommended three steps running | break the run — interleaving beats blocking |
+
+Read the first row as "no schema for it", never as "no row in the file".
+Calibration writes a row for every concept it asks about, including the ones it
+grades `none` — so after the first plan almost nothing is literally absent again,
+and a literal reading sends the learner to *build* the mechanism they have just
+finished proving they have no model of. The same care applies to the second row:
+`profile show`'s qualifier lines distinguish a concept demonstrated in a step from
+one merely answered in calibration, or one closed with a tier-3 hint or a bypassed
+reconcile gate. Only the first has earned a build step.
 
 Recommend in one line, naming the profile evidence behind the recommendation,
 then present the alternatives. The recommendation is advice; the mode is the
@@ -75,6 +84,14 @@ everything written before the step opens is scaffolding, and everything after it
 is credited to the learner's prediction. Scaffold the template afterwards and
 your own headings pay most of the gate's price, leaving the learner a sentence
 to clear a bar built to demand a falsifiable claim.
+
+Ship every blank the template has, including the ones that record what reality
+did. Those are not due yet at `record-commitment`, and the gate knows it: it
+reads the artifact minus the reconciliation sections, so a blank waiting on an
+observation is not mistaken for a question the learner declined to answer. Every
+other blank is checked wherever it sits, so one left standing refuses the
+commitment even though the learner never touched it — which is the point. A
+template blank is the question; leaving it is declining to predict.
 
 ## The hint ladder is held, not filed
 
@@ -128,10 +145,29 @@ because in build most of the step is implementation.
 **Rejected.** <one alternative, and what made it lose>
 **Costs.** <what this makes cheap, and what it makes expensive later>
 **Where I expect it to break.** <the input or condition least covered>
+
+### What actually happened
+
+- Where it actually broke: ___
+- What the tests caught that I did not predict: ___
+- The prediction above I was most wrong about, and why I believed it: ___
 ```
 
+The `## Step NN` heading carries the step's number because `DESIGN.md` is one
+append-only file for the whole project: that number is what scopes an entry to
+its step, and without it `/bmox:check`'s machine gate reads step 1's outcome and
+passes every step after it.
+
+The three lines under *What actually happened* are what that gate reads, and
+build needs them more than the other modes do. Green tests establish that the
+code works; they say nothing about whether the prediction was right, and in build
+the tests are authored before the commitment exists — so not one of them is aimed
+at the claim the learner is about to make. Without these lines a step whose
+design note was wrong in an interesting way closes as an unremarkable success.
+
 **Reconcile question:** explain the implementation from memory — what it does,
-the decision made, and one alternative rejected and why it lost.
+the decision made, one alternative rejected and why it lost, and where it
+actually broke against where you predicted it would.
 
 ## probe
 
@@ -157,7 +193,17 @@ since changed directory or language takes the path with it — the learner gets 
 resolves at that revision before handing any of them over**: fetch it and `grep`
 for every symbol you are about to name. Search results and page summaries are
 where stale paths and invented line numbers come from, and both read exactly as
-confidently as a correct coordinate.
+confidently as a correct coordinate. So does your own memory of the repository:
+a recalled path arrives fluent and unhesitating whether or not it still exists,
+which is why this step is a fetch rather than a moment of care.
+
+Two traps in the fetching itself. `git ls-remote --tags` hands back the SHA of
+the *tag object*, not of the commit it points at, and that SHA 404s everywhere a
+learner would paste it — dereference it (`git rev-parse <tag>^{commit}`) before
+writing it down. And `--depth 1` alone still transfers every blob at the
+revision, which on a repository the size of Kafka's is minutes rather than
+seconds: add `--filter=blob:none --sparse` and check out only the modules your
+coordinates name.
 
 **Name no line numbers.** They rot faster than anything else in a coordinate,
 they are the one part a `grep` for the symbol reconstructs in a second, and a
@@ -252,6 +298,27 @@ also supply the injection command and the observation targets.
 
 **You do not supply** the hypothesis, any blank inside it, or an account of
 what happened before the learner has read their own observations.
+
+**Design the injection so the hypothesis can lose.** The obvious experiment often
+cannot contradict the belief being tested. Kill a Redis primary with a healthy
+replica attached and nothing acknowledged is lost — so a learner who predicted
+"replication is synchronous enough that no acknowledged write is ever lost"
+watches reality agree, and closes the step more confident in a belief that will
+one day cost them an incident. Nothing downstream catches this: the gate counts
+observations recorded against blanks, and every blank was answered honestly.
+
+So before handing the command over, take each blank in the hypothesis and say
+what would have to happen for it to come out false. Where the naive injection
+cannot produce that, add the condition that can — partition the replica before
+killing the leader, put the system under load, injure it while it is already
+recovering — or say plainly which blank this experiment does not test. An
+observation that confirms a false belief is worse than no step at all, because it
+arrives with evidence attached and the learner has earned the right to trust it.
+
+Pin the environment to images already on the machine where you can. An unbounded
+`docker pull` sitting in front of the learner's first command is where operate
+steps die in practice: it fails silently and slowly, and a learner cannot tell a
+cold registry from a broken setup.
 
 **Commitment template**, written into the runbook file before the step opens:
 

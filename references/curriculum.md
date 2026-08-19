@@ -144,14 +144,39 @@ Every step in ROADMAP.md names:
 4. **What reality answering looks like** for this step — the concrete event
    that ends the prediction and starts the reconciliation.
 
-Build steps carry three more fields:
+Build steps carry two more fields:
 
 5. **Observable behavior** that proves it works, and that maps to a test.
 6. **The design decision** the learner must make. If there is no decision,
    merge the step into a neighbor — it is scaffolding, not learning.
-7. **What the real system does here**, one sentence, for the later comparison.
 
 If you cannot fill the fields, the step is too vague. Split it or merge it.
+
+### The roadmap is read on day one
+
+`ROADMAP.md` lands before step 1 opens and the learner re-reads it for weeks, so
+it is the file in the project most able to spoil its own steps.
+
+What the real system does at each step does not go in it. That comparison is owed
+to the learner *after* they have committed and reconciled, and `/bmox:check`
+delivers it at close-out. Parked in the roadmap it answers a later step's
+prediction on day one — and it reliably does, because the mode heuristic hands one
+concept a probe step and then a build step, so the build entry's account of the
+real mechanism is the answer to the probe step that precedes it.
+[`modes.md`](modes.md) states the general rule this is an instance of: anything
+the contract owes the learner later cannot be parked in a file they read now.
+
+The same applies to what a step is *called*. For probe and operate steps the
+title and the *Reality answers when* field name the question, not the mechanism:
+"what makes a broker's write durable", never "the broker acks before it flushes".
+A title that asserts the answer is a spoiler nothing downstream will catch,
+because no gate reads titles.
+
+`RESOURCES.md` carries the same risk more quietly. Collect the links, and do not
+paste specification prose into the conversation while researching: a passage that
+lands in the transcript has been delivered to the learner whether or not any file
+records it. Say in the file that a link is not to be opened before the step that
+needs it.
 
 ## Structural rules
 

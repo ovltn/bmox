@@ -21,13 +21,16 @@ means per mode is defined in references/modes.md.
 Rules enforced here:
   * `predicted` is a hard precondition for reality. A step's commitment
     artifact must gain MIN_COMMITMENT_GROWTH non-whitespace characters of
-    prose that is not a template blank, not one character repeated, and not
-    already elsewhere in the file, which is what stops probe and operate from
-    degrading into reading the answer. In build the same ordering is enforced
-    by physics.
-  * `observed` is a hard precondition for explaining. build gets that gate
-    from `make test`; probe and operate get it from the shape of their own
-    artifact, checked at mark-observed.
+    prose that is not one character repeated and not already elsewhere in the
+    file, and no blank the template asked for may still stand anywhere the
+    prediction is due — the sections recording what reality did are read
+    around, since they are filled at `observed`. That is what stops a step
+    from degrading into reading the answer. What build withholds is the design
+    decision; the green tests were never the thing at risk.
+  * `observed` is a hard precondition for explaining, gated per mode at
+    mark-observed: build runs `make test` and requires this step's entry to
+    record what actually happened, while probe and operate are gated on the
+    shape of their own artifact.
   * You cannot reach `done` without passing through `explained`. Skipping
     requires --force, recorded permanently as "gate_bypassed".
   * Steps complete in order: each one motivates the next. A skipped step
@@ -65,6 +68,7 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -405,6 +409,10 @@ PLACEHOLDER_RE = re.compile(r"_{3,}|<[a-z][a-z ,.'\-]+>")
 CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
 HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
 HOP_RE = re.compile(r"^hop\s*#?\s*(\d+)")
+# `## Step 01 — <title>`, the heading modes.md's build template ships. Leading
+# zeros are matched because the templates pad step numbers and the state file
+# does not.
+STEP_HEADING_RE = re.compile(r"^step\s*#?\s*0*(\d+)\b")
 
 MIN_DISTINCT_CHARS = 10
 MAX_DUPLICATED_SHARE = 0.4
@@ -415,6 +423,28 @@ SUBSTANTIVE_LINE = 20
 # A hop or bullet carrying less than this after its labels is a template stub
 # the learner never extended, not an unanswered question.
 FILLED_FIELD = 10
+# The outcome lines build's template ships: where it actually broke, what the
+# tests caught that was not predicted, and the prediction most wrong.
+BUILD_OUTCOME_LINES = 3
+# Long enough for a real suite on a cold cache, short enough that a test run
+# waiting on input fails the step instead of hanging the session forever.
+MAKE_TIMEOUT = 600
+
+# The sections every mode's template ships blank on purpose, because they record
+# what reality did and reality has not answered yet at `record-commitment`. The
+# commitment gate reads the artifact minus these, so a blank it is *supposed* to
+# find is not mistaken for a prediction the learner declined to make.
+DEFERRED_SECTIONS = ("actual path", "trace diff", "what actually happened",
+                     "what happened", "how this gets detected", "at 3am")
+
+# The section holding the prediction, per mode. Checked at `record-commitment`,
+# because a learner who wrote over the heading instead of under it has an
+# artifact the mode's observation gate will reject — and finding that out then
+# means finding out after reality was already unlocked.
+COMMITMENT_SECTION = {
+    "probe": ("predicted path",),
+    "operate": ("hypothesis",),
+}
 
 
 def nonspace(text: str) -> int:
@@ -472,18 +502,62 @@ def duplicated_share(added: list, baseline: str) -> float:
     return duplicated / substantive if substantive else 0.0
 
 
-def gate_commitment(label: str, baseline: str, current_text: str) -> int:
+def _due_now(lines: list) -> list:
+    """The artifact minus the sections that record what reality did.
+
+    Those ship blank on purpose and are filled at `observed`, so a gate running
+    at `record-commitment` has to read around them. Scoped by section rather than
+    by what the learner added, because the ordering modes.md requires lays the
+    template down before `open-step` — which puts every blank in the baseline,
+    where a diff of added lines cannot reach it.
+    """
+    out = []
+    skip_level = None
+    for line in lines:
+        m = HEADING_RE.match(line)
+        if m:
+            level, title = len(m.group(1)), m.group(2).strip().lower()
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            if skip_level is None and any(n in title for n in DEFERRED_SECTIONS):
+                skip_level = level
+                continue
+        if skip_level is None:
+            out.append(line)
+    return out
+
+
+def _thin_commitment(label: str, count: int) -> str:
+    """Absence and thinness need different advice, and telling a learner who just
+    filled every blank that they never wrote a prediction is worse than saying
+    nothing: it describes the opposite of what they did, at the one moment they
+    did the work the gate exists to demand."""
+    head = (f"{label} has gained {count} non-whitespace characters since this "
+            f"step opened; {MIN_COMMITMENT_GROWTH} are required. ")
+    if count == 0:
+        return head + ("Nothing has been added, so there is no prediction for "
+                       "reality to contradict — and predicting before looking is "
+                       "the entire method, because a guess you never wrote down "
+                       "cannot be wrong.")
+    return head + ("What is there reads as a prediction; it is the detail that "
+                   "is short. The bar is not a word count for its own sake — it "
+                   "is roughly the length at which a claim stops being "
+                   "restatable as something else once reality has answered. The "
+                   "blank that usually closes the gap is where you expect it to "
+                   "break: name the input or condition, and what you would "
+                   "expect to see happen if you are right about it.")
+
+
+def gate_commitment(label: str, mode: str, baseline: str, current_text: str) -> int:
     """Weigh the addition and return its non-whitespace character count."""
     added = added_lines(baseline, current_text)
     text = "\n".join(added)
     count = nonspace(text)
     if count < MIN_COMMITMENT_GROWTH:
-        die(f"{label} has gained {count} non-whitespace characters since this "
-            f"step opened; {MIN_COMMITMENT_GROWTH} are required. Predicting "
-            f"before looking is the entire method — a guess you never wrote down "
-            f"cannot be wrong, and being wrong on the record is what makes the "
-            f"reading stick.")
-    blanks = sorted(set(PLACEHOLDER_RE.findall(CODE_SPAN_RE.sub(" ", text))))
+        die(_thin_commitment(label, count))
+    lines = current_text.splitlines()
+    due = "\n".join(_due_now(lines))
+    blanks = sorted(set(PLACEHOLDER_RE.findall(CODE_SPAN_RE.sub(" ", due))))
     if blanks:
         die(f"{label} still carries the template's own blanks: "
             f"{', '.join(blanks[:6])}. Each one is a question, and the answer is "
@@ -502,6 +576,16 @@ def gate_commitment(label: str, baseline: str, current_text: str) -> int:
             f"already stands elsewhere in that file. A prediction copied forward "
             f"cannot be wrong about this step — write what you expect *here* to "
             f"do, including where you expect it to break.")
+    # Last, because it is the only check about where the prose sits rather than
+    # what it says: a learner who pasted 400 characters of filler is better told
+    # that than sent looking for a heading.
+    required = COMMITMENT_SECTION.get(mode)
+    if required and _find_section(lines, *required) is None:
+        die(f"{label} has no '{required[0]}' section, so the {mode} gate at "
+            f"mark-observed will not find the prediction either. The template in "
+            f"references/modes.md ships that heading: write your prediction below "
+            f"it rather than over it, so the question you were answering is still "
+            f"legible when you come back to check whether you were right.")
     return count
 
 
@@ -532,6 +616,21 @@ def _find_section(lines: list, *names):
     unfilled artifact, not to police formatting."""
     for _level, title, body in _sections(lines):
         if any(name in title for name in names):
+            return body
+    return None
+
+
+def _step_entry(lines: list, number: int):
+    """The build entry for one step.
+
+    DESIGN.md holds one entry per build step in a single append-only file, so a
+    section lookup across the whole file finds whichever step wrote that heading
+    first — and every later step then reconciles against step 1's outcome. The
+    heading that names this step number is the only reliable scope.
+    """
+    for _level, title, body in _sections(lines):
+        m = STEP_HEADING_RE.match(title)
+        if m and int(m.group(1)) == number:
             return body
     return None
 
@@ -643,19 +742,86 @@ def gate_operate(label: str, lines: list):
             f"match.")
 
 
-def gate_observation(step: dict):
-    """A machine gate for probe and operate.
+def gate_build(label: str, lines: list, number: int):
+    entry = _step_entry(lines, number)
+    if entry is None:
+        die(f"{label} has no heading naming step {number}, so there is nothing to "
+            f"read this step's outcome out of. The build template in "
+            f"references/modes.md opens each entry with `## Step {number:02d} — "
+            f"<title>`; that heading is what scopes the entry to this step in a "
+            f"file every step appends to.")
+    happened = _find_section(entry, "what actually happened", "what happened")
+    if happened is None:
+        die(f"step {number}'s entry in {label} has no 'What actually happened' "
+            f"section. observed means the tests answered — and the answer has to "
+            f"land beside the prediction it is answering, not in the conversation. "
+            f"The template in references/modes.md ships the heading.")
+    filled = [line for line in happened
+              if _is_bullet(line) and nonspace(line) >= 15
+              and not PLACEHOLDER_RE.search(line)]
+    if len(filled) < BUILD_OUTCOME_LINES:
+        die(f"'What actually happened' in {label} records {len(filled)} of "
+            f"{BUILD_OUTCOME_LINES} lines. Green tests say the code works; they do "
+            f"not say your prediction was right. Name where it actually broke, "
+            f"what the tests caught that you did not predict, and which "
+            f"prediction you were most wrong about — a step whose commitment was "
+            f"wrong and whose tests are green is the most useful step there is, "
+            f"and that is only true if the wrongness gets written down.")
 
-    build's gate is `make test`'s exit code, which cannot be talked round. probe
-    and operate have no such physics, and without one the transition to observed
-    is the model deciding it is satisfied — which is enough to carry a whole step
-    to done, flagged reconciled, on an artifact of lorem ipsum. The artifact's
-    own structure is the substitute: mode-shaped, keyed to the sections the
-    templates ship, and an unfilled artifact is the only thing it refuses.
+
+def run_make_test(step: dict):
+    """`make test` for a build step, run from the directory holding the Makefile.
+
+    Called here rather than trusted from the conversation because this is the one
+    gate in build mode that physics can settle. A model reading its own test
+    output can be talked into believing a red suite was green — by a learner, or
+    by its own summary of a long session — and an exit code cannot.
+    """
+    artifact = step["commitment"].get("artifact")
+    if not artifact:
+        die("this build step records no commitment artifact, so there is no "
+            "project directory to run `make test` in. Reopen the step with "
+            "--artifact <project>/DESIGN.md.")
+    where = os.path.dirname(resolve_artifact(artifact))
+    if not os.path.exists(os.path.join(where, "Makefile")):
+        die(f"no Makefile in {where}, so nothing can establish that the tests "
+            f"pass. build's gate is the test run: scaffold the project from "
+            f"assets/templates/project/ and wire `make test` to its runner, or "
+            f"close this step with skip-step if it is not going to be built.")
+    try:
+        return subprocess.run(["make", "test", f"STEP={step['number']}"],
+                              cwd=where, capture_output=True, text=True,
+                              timeout=MAKE_TIMEOUT)
+    except FileNotFoundError:
+        die("`make` is not on PATH, so build's machine gate cannot run. Install "
+            "make, or close this step with skip-step.")
+    except subprocess.TimeoutExpired:
+        die(f"`make test` did not finish within {MAKE_TIMEOUT}s. A suite that "
+            f"hangs has not gone green: it is usually a test waiting on input or "
+            f"on a port nothing is listening to.")
+
+
+def gate_observation(step: dict):
+    """The machine gate, one branch per mode.
+
+    Each mode has something that can settle "did reality answer" without the
+    model's opinion entering into it. In build it is `make test`'s exit code. probe
+    and operate have no such physics, so the artifact's own structure is the
+    substitute: mode-shaped, keyed to the sections the templates ship, and an
+    unfilled artifact is the only thing it refuses.
+
+    Without one, the transition to observed is the model deciding it is satisfied
+    — which is enough to carry a whole step to done, flagged reconciled, over an
+    empty directory.
     """
     mode = step.get("mode")
-    if mode not in ("probe", "operate"):
-        return
+    if mode == "build":
+        result = run_make_test(step)
+        if result.returncode != 0:
+            tail = (result.stdout + result.stderr).strip().splitlines()[-15:]
+            die("`make test` exited {} — reality has not answered yet, so the "
+                "step stays at 'predicted'. The last of its output:\n{}".format(
+                    result.returncode, "\n".join(tail) or "(no output)"))
     artifact = step["commitment"].get("artifact")
     if not artifact:
         return
@@ -664,7 +830,12 @@ def gate_observation(step: dict):
         die(f"cannot read the commitment artifact {artifact}. observed is a claim "
             f"about what that file now records, so it has to be readable.")
     lines = text.splitlines()
-    (gate_probe if mode == "probe" else gate_operate)(artifact, lines)
+    if mode == "build":
+        gate_build(artifact, lines, step["number"])
+    elif mode == "probe":
+        gate_probe(artifact, lines)
+    elif mode == "operate":
+        gate_operate(artifact, lines)
 
 
 # --------------------------------------------------------------- audit reads
@@ -865,12 +1036,6 @@ def cmd_record_commitment(_args):
         die(f"cannot read the commitment artifact {c['artifact']}. The gate weighs "
             f"that one file, so it has to be a readable file.")
     grown = os.path.getsize(path) - c.get("baseline_bytes", 0)
-    if grown < 0:
-        die(f"{c['artifact']} is {-grown} bytes smaller than when this step "
-            f"opened. The template headings are scaffolding and stay in place: "
-            f"write each prediction below its heading rather than over it, so "
-            f"the question you were answering is still legible when you come "
-            f"back to check whether you were right.")
 
     baselines = load_baselines()
     key = f"{proj_name}/step_{step['number']}"
@@ -886,7 +1051,11 @@ def cmd_record_commitment(_args):
                 f"and being wrong on the record is what makes the reading stick.")
         committed = grown
     else:
-        committed = gate_commitment(c["artifact"], baseline, text)
+        # Weighed on content, not on filesize, so filling a blank in place is
+        # worth what it says rather than what it displaced: answering `<the
+        # choice this step forces>` in fewer characters than the question took
+        # shrinks the file, and the blanks check above requires that answer.
+        committed = gate_commitment(c["artifact"], step.get("mode"), baseline, text)
         baselines.pop(key, None)
         save_baselines(baselines)
 
@@ -952,29 +1121,44 @@ cmd_record_reconciled = _simple_transition(
 
 
 def cmd_complete_step(args):
-    state = load()
-    proj_name, proj = current(state)
-    step = cur_step(proj)
-    if step["phase"] != "explained":
-        if args.force and step["phase"] == "observed":
-            step["gate_bypassed"] = True
-            audit(state, "gate_bypassed", project=proj_name, step=step["number"])
-            print("WARNING: reconciliation gate bypassed. Recorded permanently.", file=sys.stderr)
+    with state_lock():
+        state = load()
+        proj_name, proj = current(state)
+        step = cur_step(proj)
+        bypassed = False
+        if step["phase"] != "explained":
+            if args.force and step["phase"] == "observed":
+                bypassed = True
+                step["gate_bypassed"] = True
+                audit(state, "gate_bypassed", project=proj_name, step=step["number"])
+                print("WARNING: reconciliation gate bypassed. Recorded permanently.",
+                      file=sys.stderr)
+            else:
+                die(f"complete-step requires phase 'explained' (have '{step['phase']}'). "
+                    f"Reconcile prediction against reality first, or use --force to "
+                    f"bypass — the bypass is recorded forever.")
+        step_n = step["number"]
+        step["phase"] = "done"
+        step["completed"] = now()
+        audit(state, "complete_step", project=proj_name, step=step_n)
+        nxt = step_n + 1
+        proj["current_step"] = None
+        if nxt <= proj["steps_total"]:
+            msg = f"next up: step {nxt}"
         else:
-            die(f"complete-step requires phase 'explained' (have '{step['phase']}'). "
-                f"Reconcile prediction against reality first, or use --force to "
-                f"bypass — the bypass is recorded forever.")
-    step["phase"] = "done"
-    step["completed"] = now()
-    audit(state, "complete_step", project=proj_name, step=step["number"])
-    nxt = step["number"] + 1
-    proj["current_step"] = None
-    if nxt <= proj["steps_total"]:
-        msg = f"next up: step {nxt}"
-    else:
-        msg = "PROJECT COMPLETE. Consider a review pass, then /bmox:plan for the next tech."
-    save(state)
-    print(f"[{proj_name}] step {step['number']} done. {msg}")
+            msg = "PROJECT COMPLETE. Consider a review pass, then /bmox:plan for the next tech."
+        save(state)
+    # Outside the state lock, per state_lock's ordering rule. A bypass that
+    # reached only the state file would leave `profile show` — the view /bmox:plan
+    # is told to read before drafting — describing this step as a clean solve.
+    if bypassed:
+        profile = load_profile()
+        flagged = knowledge.mark_bypassed(profile, proj_name, step_n)
+        if flagged:
+            knowledge.save(profile)
+            print(f"{flagged} evidence entr{'y' if flagged == 1 else 'ies'} from "
+                  f"this step marked as gate-bypassed in the profile.", file=sys.stderr)
+    print(f"[{proj_name}] step {step_n} done. {msg}")
 
 
 def cmd_skip_step(args):
@@ -1054,21 +1238,36 @@ def _step_context(state):
     """Tag evidence with the step that produced it, when one is open."""
     proj_name = state["current"].get("project")
     if not proj_name:
-        return None, None, None, None
+        return None, None, None, None, None
     proj = state["projects"][proj_name]
     if proj.get("current_step") is None:
-        return proj_name, None, None, None
+        return proj_name, None, None, None, None
     step = cur_step(proj)
-    return proj_name, step["number"], step.get("mode"), step.get("hints")
+    return (proj_name, step["number"], step.get("mode"), step.get("hints"),
+            step.get("phase"))
+
+
+# The phases at which a step has something demonstrated to record. `explained` is
+# the reconcile gate having held; `observed` is /bmox:check writing the profile
+# ahead of a --force, which is deliberate — a bypassed step is exactly the one
+# whose gaps the next roadmap needs.
+EVIDENCE_PHASES = ("observed", "explained")
 
 
 def cmd_record_evidence(args):
     with state_lock(exclusive=False):
         state = load()
-        proj_name, step_n, mode, hints = _step_context(state)
+        proj_name, step_n, mode, hints, phase = _step_context(state)
     if args.source == "step" and step_n is None:
         die("no open step to attribute this evidence to. "
             "Use --source calibration for pre-roadmap answers.")
+    if args.source == "step" and phase not in EVIDENCE_PHASES:
+        die(f"step {step_n} of '{proj_name}' is in phase '{phase}', and evidence "
+            f"records what the learner demonstrated — which has not happened yet. "
+            f"Recorded now it would also be stamped with the hint count as it "
+            f"stands now, so hints delivered later in this step would leave the "
+            f"profile reading as an unhinted solve. Reconcile first "
+            f"(/bmox:check), then record.")
     if args.project and args.source == "step":
         die(f"--project is for calibration evidence, but --source is 'step' and "
             f"step {step_n} of '{proj_name}' is open. A step already names its "
@@ -1097,7 +1296,7 @@ def cmd_record_evidence(args):
 def cmd_record_gap(args):
     with state_lock(exclusive=False):
         state = load()
-        proj_name, step_n, _, _ = _step_context(state)
+        proj_name, step_n, _, _, _ = _step_context(state)
     if args.project and step_n is not None:
         die(f"--project is for gaps recorded before a roadmap exists, but step "
             f"{step_n} of '{proj_name}' is open. A gap carries a step number "
@@ -1130,7 +1329,7 @@ def cmd_record_gap(args):
 def cmd_resolve_gap(args):
     with state_lock(exclusive=False):
         state = load()
-        proj_name, step_n, _, _ = _step_context(state)
+        proj_name, step_n, _, _, _ = _step_context(state)
     if step_n is None:
         die("no open step to credit this resolution to. resolve-gap runs while "
             "the step that closed the gap is still open — before complete-step, "
@@ -1144,14 +1343,62 @@ def cmd_resolve_gap(args):
     print(f"gap {args.gap} on '{args.concept}' resolved by {proj_name}/{step_n}")
 
 
-def _best_outcome(evidence: list) -> str:
-    """The strongest outcome a concept ever reached, because every reader of this
-    column is asking "has this been reconciled?" — a later `partial` on one
-    sub-question does not un-demonstrate the mechanism, and showing it would send
-    /bmox:plan back to re-teach ground the profile already covers."""
+def _outcome_sequence(evidence: list) -> str:
+    """Every outcome the concept has been graded, oldest first, repeats collapsed.
+
+    Not the strongest one reached. A reader of this column is asking "has this
+    been reconciled?", and answering with the best grade hides the shape of how it
+    got there: `none` in calibration and `reconciled` after a probe step is a
+    different state of knowledge from `reconciled` twice, and it is the first that
+    a roadmap should still be aiming a step at. The sequence answers both
+    questions at once, and it is what the file already holds.
+    """
     if not evidence:
         return "-"
-    return min((e["outcome"] for e in evidence), key=knowledge.OUTCOMES.index)
+    seq = []
+    for e in evidence:
+        if not seq or seq[-1] != e["outcome"]:
+            seq.append(e["outcome"])
+    return "→".join(seq)
+
+
+def _hint_summary(evidence: list) -> str:
+    """Hints across every step that fed this concept, or "" when there were none.
+
+    Recorded per step and copied onto each concept the step named, so this
+    over-attributes when a step named several concepts — which is the honest
+    direction to be wrong in. Worth a line of its own because a concept
+    reconciled after a tier-3 hint is not the same claim as one reconciled cold,
+    and the outcome column cannot carry that difference.
+    """
+    tiers = [(f"tier{n}", sum((e.get("hints") or {}).get(f"tier{n}", 0)
+                              for e in evidence)) for n in (1, 2, 3)]
+    named = [f"{name} x{total}" for name, total in tiers if total]
+    return ", ".join(named)
+
+
+def _qualifiers(evidence: list, gaps: list) -> list:
+    """The lines that say what the outcome column cannot."""
+    out = []
+    hints = _hint_summary(evidence)
+    if hints:
+        out.append(f"hints while earning it: {hints}")
+    bypassed = sorted({f"{e.get('project')}/{e.get('step')}"
+                       for e in evidence if e.get("bypassed")})
+    if bypassed:
+        out.append(f"reconcile gate bypassed on: {', '.join(bypassed)}")
+    if evidence and all(e.get("source") == "calibration" for e in evidence):
+        out.append("answered in calibration only — no step has demonstrated it")
+    # The transfer story /bmox:status is told to report. Without it the only way
+    # to see that a concept was met twice in different clothes is to read the raw
+    # JSON, so the most interesting thing in the file needs a tool nobody reaches
+    # for to find it.
+    projects = sorted({e.get("project") for e in evidence if e.get("project")})
+    if len(projects) > 1:
+        out.append(f"met in more than one project: {', '.join(projects)}")
+    for g in gaps:
+        out.append(f"gap {g['id']}: {g['note']}")
+    return out
 
 
 def _width(rows, index: int, floor: int = 1) -> int:
@@ -1181,16 +1428,17 @@ def cmd_profile(args):
     for key, c in sorted(concepts.items(), key=lambda kv: (-len(kv[1]["evidence"]), kv[0])):
         gaps = [g for g in c["open_gaps"] if g["resolved_by"] is None]
         modes = sorted({e["mode"] for e in c["evidence"] if e.get("mode")})
-        rows.append((key, _best_outcome(c["evidence"]), len(c["evidence"]),
-                     ",".join(modes) or "-", gaps))
+        rows.append((key, _outcome_sequence(c["evidence"]), len(c["evidence"]),
+                     ",".join(modes) or "-", len(gaps),
+                     _qualifiers(c["evidence"], gaps)))
     w_key, w_outcome, w_count, w_modes = (_width(rows, 0), _width(rows, 1),
                                           _width(rows, 2), _width(rows, 3))
-    for key, outcome, count, modes, gaps in rows:
+    for key, outcome, count, modes, gap_count, qualifiers in rows:
         print(f"{key:<{w_key}} outcome={outcome:<{w_outcome}} "
               f"evidence={count:<{w_count}} "
-              f"modes={modes:<{w_modes}} open_gaps={len(gaps)}")
-        for g in gaps:
-            print(f"    gap {g['id']}: {g['note']}")
+              f"modes={modes:<{w_modes}} open_gaps={gap_count}")
+        for line in qualifiers:
+            print(f"    {line}")
 
 
 def cmd_status(args):
@@ -1291,7 +1539,7 @@ def main():
 
     sp = sub.add_parser("complete-step")
     sp.add_argument("--force", action="store_true")
-    sp.set_defaults(fn=cmd_complete_step)
+    sp.set_defaults(fn=cmd_complete_step, locking="self")
 
     sp = sub.add_parser("skip-step")
     sp.add_argument("number", type=int)

@@ -45,6 +45,10 @@ class Bmox:
             f.write(content)
         return relpath
 
+    def read(self, relpath):
+        with open(os.path.join(self.root, relpath)) as f:
+            return f.read()
+
 
 @pytest.fixture
 def bmox(tmp_path, monkeypatch):

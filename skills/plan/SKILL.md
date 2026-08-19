@@ -30,6 +30,14 @@ Every `state.py` below means
    carry open gaps. A record the learner has never seen is one they cannot
    correct, and you are about to plan weeks of work on it.
 
+   Read the indented lines under each concept, not just the outcome. They are
+   what makes the outcome mean anything: an outcome shown as `none→reconciled`
+   got there, and a concept marked reconciled that also says it was answered in
+   calibration only, or earned with a tier-3 hint, or closed on a bypassed
+   reconcile gate, is not ground you may compress away. "Do not re-teach what is
+   reconciled" applies to a concept that was demonstrated, and those lines are
+   how you tell the difference.
+
 3. **Interview.** curriculum.md's *Interview* — three questions, no more. One
    question per message, and wait for each answer before sending the next;
    asked together they get answered together, briefly. The time budget answer
@@ -49,7 +57,11 @@ Every `state.py` below means
    unrelated projects.
 
 5. **Research** per curriculum.md's *Research before drafting a single step*.
-   Collect 4–8 primary links for `RESOURCES.md`.
+   Collect 4–8 primary links for `RESOURCES.md`. Collect *links*: search tools
+   return prose, and a paragraph of the RESP or Kafka protocol spec quoted into
+   this conversation has been delivered to the learner before a single step
+   exists to predict against it. Read what you need, write down where it was, and
+   keep the passage out of the transcript.
 
 6. **Draft the roadmap, then get approval.** Every step carries curriculum.md's
    mandatory fields. Its *why* line has to name the specific profile evidence

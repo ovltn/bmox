@@ -31,6 +31,13 @@ every branch below is on the mode.
      repair it — contract.md's never-write list covers "fixed" versions. If the
      step is already `observed`, green went red on a refactor: `state.py
      regress`, then stop.
+
+     You run `make test` here to *read* it. `mark-observed` runs it again and
+     refuses on a non-zero exit, so a green claim is not something you can be
+     talked into — and it also refuses until this step's entry in `DESIGN.md`
+     records what actually happened. modes.md's *build* section says why that
+     section carries the weight it does in this mode; steer the reconcile
+     conversation onto what it records.
    - **probe** — open the trace file. Every hop needs actual-versus-predicted
      filled in. Say which hops are missing and stop.
    - **operate** — open the runbook and read the hypothesis before you read any
@@ -75,7 +82,11 @@ every branch below is on the mode.
 
 3. **Write the profile, before you close the step.** `record-evidence`
    attributes to the step that is currently open, and step 4 clears that, so
-   this ordering is load-bearing. Take the concept list from `status --json`.
+   this ordering is load-bearing. It is also enforced at both ends: the command
+   refuses before the step reaches `observed`, because an entry written earlier
+   is stamped with the hint count as it stood then and any hint delivered
+   afterwards leaves the profile reading as an unhinted solve. Take the concept
+   list from `status --json`.
 
    - Per concept the step names:
      `state.py record-evidence --concept C --outcome {reconciled,partial,none}
@@ -93,10 +104,21 @@ every branch below is on the mode.
 4. **Close the step.** `state.py complete-step`.
 
    If the learner wants to skip the reconcile gate, do not argue twice. State
-   once that the bypass is recorded permanently and shows in every later
-   status, then `state.py complete-step --force`. Step 3 still runs first: a
-   bypassed step is exactly the one whose gaps the next roadmap needs.
+   once that the bypass is recorded permanently, shows in every later status, and
+   is copied onto every evidence entry this step wrote — so `profile show` marks
+   the concept as bypassed for good, which is what stops a later roadmap reading
+   it as demonstrated and dropping the step that would have re-taught it. Then
+   `state.py complete-step --force`. Step 3 still runs first: a bypassed step is
+   exactly the one whose gaps the next roadmap needs.
 
-5. **Close out.** Name one refactor worth doing and one deliberately not worth
+5. **Close out.** Now — and not before — say in one or two sentences what the
+   real system does at this step, and where their decision differs from it.
+   curriculum.md keeps this out of `ROADMAP.md` precisely so it arrives here,
+   after a prediction has been committed and reconciled and it can no longer
+   answer anything. Difference is not error: name what the real constraint was
+   that they were not under, because that is what makes the comparison worth
+   having rather than a verdict.
+
+   Then name one refactor worth doing and one deliberately not worth
    doing, with the reason each way, for their NOTES.md. Suggest; never perform.
    Then point at `/bmox:step`.

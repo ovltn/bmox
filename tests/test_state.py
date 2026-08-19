@@ -183,11 +183,32 @@ LOREM = ("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do "
          "culpa qui officia deserunt mollit anim id est laborum.\n")
 
 
+BUILD_OBSERVED = """
+### What actually happened
+
+- Where it actually broke: the forward scan, on a segment whose last index entry
+  sat exactly on a four-kilobyte boundary, which the binary search stepped past
+- What the tests caught that I did not predict: a lookup for an offset below the
+  first index entry returned that entry rather than scanning from the start
+- The prediction above I was most wrong about, and why I believed it: I assumed
+  the index always holds an entry at or before any offset I ask it for
+"""
+
+
 def _append(bmox, relpath, text):
     path = os.path.join(bmox.root, relpath)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:
         f.write(text)
+
+
+def _wire_make(bmox, green=True):
+    """build's machine gate shells out to `make test`, so a build step needs a
+    Makefile to be gated against at all. Written per test rather than in a
+    fixture because whether the suite is green is what half of these vary."""
+    recipe = "\t@echo '3 tests passed'\n" if green else \
+             "\t@echo 'FAIL: 2 assertions'; exit 1\n"
+    bmox.write("kafka/Makefile", ".PHONY: test\ntest:\n" + recipe)
 
 
 def _capture(bmox, *argv):
@@ -481,15 +502,57 @@ def test_commitment_refuses_the_templates_own_unfilled_blanks(project, capsys):
     assert project.step(1)["phase"] == "ready"
 
 
-def test_a_blank_left_in_the_scaffolding_is_not_charged_to_the_learner(project):
-    """The template lands before the step opens, so its own blanks sit in the
-    baseline and only what the learner writes is weighed. A blank they never
-    touched is scaffolding, not a placeholder they left standing."""
+def test_a_blank_left_standing_in_the_template_is_refused(project, capsys):
+    """The template lands before the step opens, which puts every one of its
+    blanks in the baseline — so a check that reads only the added lines can never
+    see one left standing, and prose written beside an untouched blank clears the
+    gate while answering nothing. The blanks are read from the artifact."""
     project.write(DESIGN, "## Step 01 — the offset index\n\n"
                           "**Decision.** <the choice this step forces>\n"
                           "**Taking.** <the option chosen>\n")
     project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
     _append(project, DESIGN, DESIGN_NOTE)
+    with pytest.raises(SystemExit):
+        project.run("record-commitment")
+    assert "<the choice this step forces>" in capsys.readouterr().err
+    assert project.step(1)["phase"] == "ready"
+
+
+def test_an_unfilled_hypothesis_does_not_unlock_reality(project, capsys):
+    """The exact shape the sanctioned ordering produces: the runbook skeleton lands
+    before open-step, so every `___` sits in the baseline, and prose appended
+    beside them answers no observable. Reality has to stay locked."""
+    project.write(RUNBOOK, "# Runbook 01 — killing the leader\n\n"
+                  "## Hypothesis\n\nIf I kill the leader, I predict:\n\n"
+                  "- the client sees ___\n- the log shows ___\n"
+                  "- recovery takes ___ seconds\n")
+    project.run("open-step", "1", "--mode", "operate", "--artifact", RUNBOOK)
+    _append(project, RUNBOOK, "\n## Notes\n\n" + (
+        "I expect it to be broken briefly and then recover on its own, because "
+        "Kafka is usually well behaved about this sort of thing and the consumers "
+        "should pick up again once a new leader has been chosen for the partition. "
+        "There may be a short blip in throughput while that settles down again. "
+        "It is hard to say much more than this without standing the cluster up and "
+        "watching what the dashboards actually do while the broker is going away, "
+        "which is more or less the whole reason for running the experiment at all "
+        "rather than reasoning about it from the documentation.\n"))
+    with pytest.raises(SystemExit):
+        project.run("record-commitment")
+    assert "___" in capsys.readouterr().err
+    assert project.step(1)["phase"] == "ready"
+
+
+def test_blanks_in_the_sections_due_later_do_not_block_the_commitment(project):
+    """Every mode's template ships the reconciliation sections blank on purpose:
+    they record what reality did, and reality has not answered at
+    record-commitment. A gate that read them would refuse a complete prediction
+    for not yet knowing the outcome."""
+    project.write(DESIGN, "## Step 01 — the offset index\n")
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, DESIGN_NOTE +
+            "\n### What actually happened\n\n"
+            "- Where it actually broke: ___\n"
+            "- The prediction I was most wrong about: ___\n")
     project.run("record-commitment")
     assert project.step(1)["phase"] == "predicted"
 
@@ -544,42 +607,59 @@ def test_a_prediction_of_around_two_hundred_words_clears_the_gate_comfortably(op
     assert opened.step(1)["commitment"]["committed_chars"] > 1000
 
 
-def test_the_commitment_refusal_says_why_the_ordering_exists(opened, capsys):
+def test_an_empty_artifact_is_told_no_prediction_exists(opened, capsys):
     """This refusal is read at the moment the learner most wants past the gate,
     so it has to carry the argument for the gate, not just the verdict."""
-    opened.write(TRACE, "the selector loop reads the frame\n")
+    opened.write(TRACE, "")
     with pytest.raises(SystemExit):
         opened.run("record-commitment")
     err = capsys.readouterr().err
-    assert "Predicting before looking is the entire method" in err
-    assert "being wrong on the record" in err
+    assert "no prediction for reality to contradict" in err
+    assert "cannot be wrong" in err
 
 
-def test_a_shrunk_artifact_is_refused_without_a_negative_byte_count(project, capsys):
-    """Replacing a template placeholder with a terser real answer shrinks the
-    file. Reporting that as "grown -112 bytes" says nothing, and the
-    never-wrote-it-down argument is false when the prediction is on the page."""
-    project.write(DESIGN, "<the choice this step forces> " * 40)
-    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
-    project.write(DESIGN, "leader keeps the offset")
+def test_a_thin_prediction_is_not_told_it_never_wrote_one(opened, capsys):
+    """A learner who filled every blank and came up short of the threshold did the
+    thing the gate asks for. Telling them a guess they never wrote down cannot be
+    wrong describes the opposite of what they just did, at the one moment the
+    message is guaranteed to be read."""
+    opened.write(TRACE, "the selector loop reads the frame, then the log appends it\n")
     with pytest.raises(SystemExit):
-        project.run("record-commitment")
+        opened.run("record-commitment")
     err = capsys.readouterr().err
-    assert "is 1177 bytes smaller than when this step opened" in err
-    assert "-1177" not in err
+    assert "reads as a prediction" in err
     assert "cannot be wrong" not in err
-    assert project.step(1)["phase"] == "ready"
+    assert "where you expect it to break" in err
 
 
-def test_a_shrunk_artifact_is_told_the_headings_are_scaffolding(project, capsys):
+def test_filling_a_blank_in_place_is_not_punished_for_shrinking_the_file(project):
+    """Answering a blank in fewer characters than the question took leaves the
+    file smaller than the template was — and the blanks check above requires that
+    answer, so a filesize floor would refuse the one edit the gate demands. The
+    addition is weighed on what it says, not on what it displaced."""
+    project.write(DESIGN, "## Step 01 — the offset index\n\n" + "\n".join(
+        f"**Point {i}.** <the consideration this step forces you to weigh, at "
+        f"length, in one carefully worded sentence which runs on and on>"
+        for i in range(1, 9)) + "\n")
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    before = len(project.read(DESIGN))
+    project.write(DESIGN, "## Step 01 — the offset index\n\n" + "\n".join(
+        f"**Point {i}.** Sparse index, one entry every four kilobytes of log."
+        for i in range(1, 9)) + "\n")
+    assert len(project.read(DESIGN)) < before, "the fill has to shrink the file"
+    project.run("record-commitment")
+    assert project.step(1)["phase"] == "predicted"
+
+
+def test_a_shrunk_artifact_is_judged_on_content_not_on_filesize(project, capsys):
     project.write(DESIGN, "x" * 800)
     project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
     project.write(DESIGN, "x" * 700)
     with pytest.raises(SystemExit):
         project.run("record-commitment")
     err = capsys.readouterr().err
-    assert "100 bytes smaller" in err
-    assert "scaffolding" in err
+    assert "distinct characters" in err
+    assert "smaller" not in err
 
 
 def test_insufficient_growth_still_argues_for_the_gate(opened, capsys):
@@ -756,15 +836,96 @@ def test_an_operate_hypothesis_left_blank_cannot_reach_observed(project, capsys)
     assert "unfilled" in capsys.readouterr().err
 
 
-def test_a_build_step_reaches_observed_on_its_own_gate(project):
+def test_a_build_step_reaches_observed_on_a_green_suite(project):
     """build's machine gate is the exit code of `make test`, which no wording can
-    argue with, so mark-observed does not read DESIGN.md."""
+    argue with — so mark-observed runs it rather than believing a claim about it."""
+    project.write(DESIGN, "# kafka\n")
+    _wire_make(project, green=True)
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, DESIGN_NOTE)
+    project.run("record-commitment")
+    _append(project, DESIGN, BUILD_OBSERVED)
+    project.run("mark-observed", "--evidence", "3 tests green")
+    assert project.step(1)["phase"] == "observed"
+
+
+def test_a_build_step_with_a_red_suite_stays_at_predicted(project, capsys):
+    """The claim passed to --evidence is the model's, and a model reading its own
+    test output over a long session can be talked into believing a red suite was
+    green. The exit code cannot be."""
+    project.write(DESIGN, "# kafka\n")
+    _wire_make(project, green=False)
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, DESIGN_NOTE)
+    project.run("record-commitment")
+    _append(project, DESIGN, BUILD_OBSERVED)
+    with pytest.raises(SystemExit):
+        project.run("mark-observed", "--evidence", "14 tests green")
+    err = capsys.readouterr().err
+    assert "make test` exited" in err
+    assert "FAIL: 2 assertions" in err
+    assert project.step(1)["phase"] == "predicted"
+
+
+def test_a_build_step_with_no_makefile_is_refused_rather_than_waved_through(project, capsys):
+    """Nothing to run is not the same as nothing to check. A build step over a
+    directory with no test runner is the vacuous green the gate exists to stop."""
     project.write(DESIGN, "# kafka\n")
     project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
     _append(project, DESIGN, DESIGN_NOTE)
     project.run("record-commitment")
-    project.run("mark-observed", "--evidence", "make test is green")
-    assert project.step(1)["phase"] == "observed"
+    with pytest.raises(SystemExit):
+        project.run("mark-observed", "--evidence", "green")
+    assert "no Makefile" in capsys.readouterr().err
+    assert project.step(1)["phase"] == "predicted"
+
+
+def test_a_green_build_step_still_needs_its_outcome_written_down(project, capsys):
+    """Green tests say the code works. They say nothing about whether the
+    prediction was right, and build is the mode where that gap is widest: the
+    tests are authored before the commitment, so none of them is aimed at it."""
+    project.write(DESIGN, "# kafka\n")
+    _wire_make(project, green=True)
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, DESIGN_NOTE)
+    project.run("record-commitment")
+    with pytest.raises(SystemExit):
+        project.run("mark-observed", "--evidence", "3 tests green")
+    assert "What actually happened" in capsys.readouterr().err
+    assert project.step(1)["phase"] == "predicted"
+
+
+def test_build_reconciliation_is_read_from_the_current_step_not_the_first(project):
+    """DESIGN.md carries one entry per build step in one file. Matching the first
+    'What actually happened' would grade step 2 against step 1's outcome."""
+    project.write(DESIGN, "# kafka\n")
+    _wire_make(project, green=True)
+    project.run("open-step", "1", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, DESIGN_NOTE)
+    project.run("record-commitment")
+    _append(project, DESIGN, BUILD_OBSERVED)
+    project.run("mark-observed", "--evidence", "3 tests green")
+    project.run("record-reconciled")
+    project.run("complete-step")
+    project.run("open-step", "2", "--mode", "build", "--artifact", DESIGN)
+    _append(project, DESIGN, """
+## Step 02 — recovering the tail after an unclean shutdown
+
+**Decision.** Whether startup trusts the last index entry it finds or rescans the
+final segment from that entry forward to confirm the records behind it landed.
+**Taking.** Rescan from the last index entry, because a crash between appending a
+record and flushing the index leaves an entry pointing at bytes nobody wrote.
+**Rejected.** Trusting the index outright, which makes startup constant-time and
+makes a torn tail indistinguishable from a healthy one until the first read.
+**Costs.** Cheap afterwards: every offset the index names is known to resolve.
+Expensive at boot, proportional to segment size rather than to damage.
+**Where I expect it to break.** A segment whose final record is truncated
+mid-header, where the length prefix itself is partially written.
+""")
+    project.run("record-commitment")
+    with pytest.raises(SystemExit):
+        project.run("mark-observed", "--evidence", "3 tests green")
+    assert project.step(2)["phase"] == "predicted"
 
 
 # ------------------------------------------------------------- lifecycle
@@ -936,11 +1097,11 @@ def test_replan_refuses_while_a_step_is_in_flight(committed):
 
 # ----------------------------------------------------------------- profile
 
-def test_record_evidence_tags_the_current_step(committed):
-    committed.run("record-hint", "--tier", "2")
-    committed.run("record-evidence", "--concept", "write-ahead-log",
-                  "--outcome", "reconciled", "--note", "six hops, one wrong")
-    ev = committed.profile()["concepts"]["write-ahead-log"]["evidence"][0]
+def test_record_evidence_tags_the_current_step(observed):
+    observed.run("record-hint", "--tier", "2")
+    observed.run("record-evidence", "--concept", "write-ahead-log",
+                 "--outcome", "reconciled", "--note", "six hops, one wrong")
+    ev = observed.profile()["concepts"]["write-ahead-log"]["evidence"][0]
     assert ev["project"] == "kafka"
     assert ev["step"] == 1
     assert ev["mode"] == "probe"
@@ -1071,14 +1232,92 @@ def test_profile_show_names_each_concepts_outcome(project):
     assert "outcome=none" in out
 
 
-def test_profile_show_surfaces_the_strongest_outcome_a_concept_reached(project):
-    """Three skills read grades off this view to decide what not to re-teach, so
-    the question it answers is "has this been reconciled?"."""
+def test_profile_show_prints_the_sequence_a_concept_was_graded(project):
+    """Three skills read grades off this view to decide what not to re-teach. The
+    best grade reached answers "has this been reconciled?" while hiding how it got
+    there — and `none` then `reconciled` is a different state of knowledge from
+    `reconciled` twice, in the direction that still wants a step aimed at it."""
+    _calibrate(project, "quorum", "none")
     _calibrate(project, "quorum", "reconciled")
+    assert "outcome=none→reconciled" in _profile_show(project)
+
+
+def test_profile_show_collapses_a_repeated_outcome(project):
+    _calibrate(project, "quorum", "partial")
     _calibrate(project, "quorum", "partial")
     out = _profile_show(project)
+    assert "outcome=partial " in out
+    assert "partial→partial" not in out
+
+
+def test_profile_show_says_when_only_calibration_has_answered(project):
+    """A concept quizzed once and never built against displays the same outcome as
+    one demonstrated in a step, and modes.md's heuristic reads that outcome to
+    hand out a build step. One good guess should not buy one."""
+    _calibrate(project, "memory-encodings", "reconciled")
+    assert "calibration only" in _profile_show(project)
+
+
+def test_profile_show_names_the_hints_behind_a_reconciled_concept(observed):
+    observed.run("record-hint", "--tier", "3")
+    observed.run("record-evidence", "--concept", "write-ahead-log",
+                 "--outcome", "reconciled", "--note", "explained the flush order")
+    out = _profile_show(observed)
     assert "outcome=reconciled" in out
-    assert "outcome=partial" not in out
+    assert "tier3 x1" in out
+
+
+def test_profile_show_marks_a_concept_whose_gate_was_bypassed(observed):
+    """/bmox:plan drops steps for concepts it reads as reconciled, so a bypass
+    invisible here silently drops the step that would have re-taught the one
+    concept nobody ever explained."""
+    observed.run("record-evidence", "--concept", "write-ahead-log",
+                 "--outcome", "reconciled", "--note", "tests went green")
+    observed.run("complete-step", "--force")
+    out = _profile_show(observed)
+    assert "bypassed on: kafka/1" in out
+
+
+def test_a_bypass_reaches_the_evidence_the_step_already_wrote(observed):
+    """record-evidence runs before complete-step, so at the moment the entry is
+    written nobody has decided yet whether the gate will be bypassed."""
+    observed.run("record-evidence", "--concept", "write-ahead-log",
+                 "--outcome", "reconciled", "--note", "tests went green")
+    assert observed.profile()["concepts"]["write-ahead-log"]["evidence"][0]["bypassed"] is False
+    observed.run("complete-step", "--force")
+    assert observed.profile()["concepts"]["write-ahead-log"]["evidence"][0]["bypassed"] is True
+
+
+def test_an_honest_close_leaves_no_bypass_mark(observed):
+    observed.run("record-evidence", "--concept", "write-ahead-log",
+                 "--outcome", "reconciled", "--note", "explained the flush order")
+    observed.run("record-reconciled")
+    observed.run("complete-step")
+    assert "bypassed" not in _profile_show(observed)
+
+
+def test_profile_show_names_a_concept_met_in_more_than_one_project(project):
+    """The transfer story /bmox:status is told to report. Reachable only from the
+    raw JSON, the most interesting line in the file needs a tool nobody reaches
+    for in order to be found."""
+    project.run("record-evidence", "--concept", "append-only-log", "--outcome",
+                "partial", "--note", "n", "--source", "calibration",
+                "--project", "kafka")
+    project.run("record-evidence", "--concept", "append-only-log", "--outcome",
+                "reconciled", "--note", "n", "--source", "calibration",
+                "--project", "redis")
+    assert "met in more than one project: kafka, redis" in _profile_show(project)
+
+
+def test_record_evidence_refuses_before_the_step_has_been_observed(committed, capsys):
+    """An entry written at `predicted` is stamped with the hint count as it stands
+    then, so every hint delivered afterwards leaves the profile reading as an
+    unhinted solve — and the entry claims a demonstration that has not happened."""
+    with pytest.raises(SystemExit):
+        committed.run("record-evidence", "--concept", "write-ahead-log",
+                      "--outcome", "reconciled", "--note", "she gets it")
+    assert "phase 'predicted'" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(committed.root, ".bmox", "profile.json"))
 
 
 def test_profile_show_orders_concepts_by_evidence_count_descending(project):
@@ -1446,9 +1685,11 @@ def test_an_existing_schema_v2_state_file_still_drives_a_step(bmox):
         "audit": [],
     }))
     bmox.write(DESIGN, DESIGN_NOTE)
+    _wire_make(bmox, green=True)
     bmox.run("record-commitment")
     bmox.run("record-hint", "--tier", "1")
-    bmox.run("mark-observed", "--evidence", "make test is green")
+    _append(bmox, DESIGN, BUILD_OBSERVED)
+    bmox.run("mark-observed", "--evidence", "3 tests green")
     bmox.run("record-reconciled")
     bmox.run("complete-step")
     step = bmox.state()["projects"]["kafka"]["steps"]["step_1"]

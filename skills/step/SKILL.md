@@ -11,7 +11,7 @@ than read off the roadmap, because the roadmap's suggestion was made before the
 last few steps moved the profile.
 
 Read `${CLAUDE_PLUGIN_ROOT}/references/contract.md` (what you may write, what
-you may never write, what stays withheld) and `modes.md` (the three modes,
+you may never write or say, what stays withheld) and `modes.md` (the three modes,
 their setup, and their templates) before doing anything below.
 
 Every `state.py` below means
@@ -96,21 +96,23 @@ Every `state.py` below means
 7. **Hand over and stop.** Point at the artifact and at the materials step 3
    stood up, and tell the learner three things about it:
 
-   - **Add to the template; do not write over it.** The template's headings and
-     the prompt inside each blank stay where they are, and the prediction goes
-     beneath them. The gate weighs how much the file grew after `open-step`, so
-     a long prompt overwritten with a terser real answer can leave the file
-     *smaller* than it started, and `record-commitment` then refuses a genuine
-     prediction. Writing beneath the prompt also keeps the question legible,
-     which is what they need when they come back to see whether they were right.
+   - **Answer every blank.** Filling one in place is fine and so is writing
+     beneath it — the gate weighs what the answer says, not what it displaced, so
+     a long prompt replaced by a terser real answer costs them nothing even when
+     it leaves the file smaller than it started. What it will not accept is a
+     blank left standing anywhere the prediction is due, whether or not they
+     touched it: the blank is the question, and prose written beside it answers
+     nothing. Keeping the prompt visible above the answer is worth doing anyway,
+     for when they come back to see whether they were right.
    - **What clears the gate:** one specific, falsifiable claim in every blank
      that asks what they *expect*, a sentence or two each — two or three hundred
      words by the time the template is full, which is several times what the gate
-     needs. Blanks that record what reality did are due later and wait for it.
-     `record-commitment` names the exact threshold if it ever refuses, so do not
-     hand that number over as a target: writing to a byte count produces filler,
-     and filler cannot come out false, which is the one thing the bar exists to
-     demand.
+     needs. Blanks that record what reality did are due later and wait for it;
+     the gate reads around those sections. Do not set the threshold as a target:
+     writing to a character count produces filler, and filler cannot come out
+     false, which is the one thing the bar exists to demand. If it does refuse,
+     it says whether the prediction is missing or merely thin, and thin is a
+     prompt to say more about where they expect it to break — not to pad.
    - **Then `state.py record-commitment`**, and `/bmox:hint` if they stall before
      that.
 
