@@ -1,13 +1,17 @@
 # {{TECH}} roadmap
 
-Depth: {{DEPTH}} · Language: {{LANGUAGE}} · External grader: {{GRADER}}
+Reaches: {{DEPTH}} · Language: {{LANGUAGE}} · External grader: {{GRADER}}
 
-Each stage names: (1) observable behavior, (2) the design decision that is
-mine to make, (3) what real {{TECH}} does — for the post-green diff.
+**Capability:** {{GOAL}}
 
-<!-- bmox-new fills stages here. Every stage MUST have all three fields. -->
+Each step names what it unlocks, the concepts it touches, and the mode
+suggested for it. The mode is a recommendation — it is chosen for real when
+the step opens.
 
-## Stage 1 — {{TITLE}}
-- **Proves:**
-- **My decision:**
-- **Real {{TECH}}:**
+<!-- bmox-plan fills steps here. Every step MUST have all four fields. -->
+
+## Step 1 — {{TITLE}}
+- **Unlocks:**
+- **Concepts:**
+- **Suggested mode:** {{MODE}} — {{WHY}}
+- **Reality answers when:**
