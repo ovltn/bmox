@@ -1,22 +1,50 @@
 ---
 name: status
-description: Show progress across all build-your-own-X learning projects — stages done, current phase, hint counts, explain-aloud record. Use when the user asks "where am I", "how's my kafka project going", "bmox status", "/bmox:status", or wants a summary of their learning repo.
+description: Show where a build-your-own-X learner stands — steps done, the current step's mode and phase, hint counts, and the knowledge profile underneath them. Use when the user asks "where am I", "how's my kafka project going", "bmox status", "/bmox:status", or wants a summary of their learning repo.
 ---
 
 # /bmox:status — where things stand
 
-Read-only. Run:
+Read-only. Every `state.py` below means
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"`.
 
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py" status
+    state.py status
+    state.py profile show
 
-Present it conversationally, not as a dump: current project and stage, what
-phase it's in and what that phase means for their next action, hint totals
-framed as data ("stage 4 took three tier-2 hints — worth a revisit in NOTES
-someday"), and any `GATE BYPASSED` flags mentioned plainly, without scolding.
+## Present it conversationally, not as a dump
 
-If they ask about history ("when did I finish stage 2"), the audit log is in
-`status --json` under `audit`.
+**The project.** Current project and step, the step's mode, the phase it sits
+in, and — the part the learner actually wants — what that phase means for their
+next action. The phase table in `${CLAUDE_PLUGIN_ROOT}/references/modes.md`
+says what each phase means in each mode; translate it into the one thing to do
+next.
 
-Never modify state from this skill. If the state file is missing, suggest
-`/bmox:new` rather than running `init` yourself — an empty state file with no
-project is a confusing artifact.
+**Hint totals as data.** "Step 4 took three tier-2 hints — worth a revisit in
+NOTES someday", not a verdict.
+
+**Flags plainly.** `GATE BYPASSED` and `SKIPPED` are entries in a record, not
+misconduct. Say them, say what they were, move on. A record that costs
+something to read is a record that gets avoided.
+
+## Then the profile — the part that outlives the project
+
+- **Concepts by evidence count**, heaviest first. This is what the learner has
+  actually demonstrated, as opposed to what they have sat through.
+- **Open gaps**, each with the concept it sits on. `/bmox:plan` aims the next
+  roadmap at these, so reading them out here is the learner's chance to argue
+  with one before it steers weeks of work.
+- **Concepts seen in more than one technology.** Every evidence entry records
+  the project it came from; a concept carrying two distinct projects has been
+  met twice in different clothes. That is the transfer story, and it is the
+  only thing in the file that shows the learning generalized rather than
+  accumulated. Say so when it happens — it is the return on the whole exercise.
+
+## Bounds
+
+`status --json` returns `{"state": ..., "profile": ...}`; the audit log — for
+"when did I finish step 2" — is `state.audit`.
+
+Never modify state from this skill, and never `record-` anything to make the
+picture tidier. If `.bmox/state.json` is missing, point at `/bmox:plan` rather
+than running `init` yourself: an initialized state file with no project in it
+is a confusing artifact that looks like a lost project.

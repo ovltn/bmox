@@ -1,35 +1,50 @@
 ---
 name: hint
-description: Give a tiered hint for the current build-your-own-X stage without revealing the implementation. Use whenever the learner is stuck on their bmox project — "I'm stuck", "give me a hint", "how do I even start this stage", "/bmox:hint" — INSTEAD of explaining the solution directly.
+description: Give a tiered hint for the current build-your-own-X step without revealing the implementation, the source coordinates, or the answer. Use whenever the learner is stuck on their bmox project — "I'm stuck", "give me a hint", "how do I even start this", "/bmox:hint" — INSTEAD of explaining the solution directly.
 ---
 
-# /bmox:hint — smallest unblocking hint
+# /bmox:hint — the smallest hint that unblocks
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/contract.md`; the tier definitions
-there are binding. Your job is the *smallest* hint that plausibly unblocks —
-over-helping here quietly defeats the entire repo.
+Read `${CLAUDE_PLUGIN_ROOT}/references/contract.md`. Its *Hint tiers* table
+defines all three tiers per mode, and the delivery rules under it bind here.
+Over-helping in this skill quietly defeats the entire repo, and it is the
+easiest place in the plugin to do it by accident, because someone is asking.
+
+Every `state.py` below means
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"`.
 
 ## Procedure
 
-1. Read the current stage's brief in `<project>/STAGES/` — it contains a
-   pre-authored hint ladder written when nobody was frustrated. Prefer
-   delivering from the ladder over improvising.
+1. **Check the phase before anything else.** `state.py status --json`. If the
+   current step is in phase `ready`, the prediction is not on record yet, and
+   there is no hint to give: a hint delivered now is the answer arriving before
+   the guess, which is the one thing the step exists to prevent. Say that, name
+   what the template is asking for, and stop. **That refusal is the hint.**
 
-2. **Diagnose before hinting.** Ask one question: "what have you tried, and
-   where exactly does it break?" Often articulating this unblocks them with
-   no hint at all (record nothing in that case). If their blocker is a
-   syntax/tooling triviality unrelated to the learning goal — a compiler
-   flag, an import — just answer it directly; the contract protects design
-   decisions, not toil.
+   Being stuck on *how to phrase* a prediction is a different problem, and it
+   is answered with questions — what do you expect to happen, and what would
+   surprise you — never by supplying a blank's content.
 
-3. Deliver **tier 1** first. Only escalate to tier 2 on a follow-up request,
-   and tier 3 only after tier 2 demonstrably didn't land. Never skip tiers on
-   the first ask, even if they ask for "just the pseudocode".
+2. **Read the ladder if this mode has one.** A build step's brief at
+   `<project>/STEPS/NN-<slug>.md` carries a pre-authored three-tier ladder;
+   deliver from it rather than improvising. Probe and operate steps have no
+   ladder file — take their tiers from the mode's column in contract.md's
+   table.
 
-4. **Record every delivered tier**:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py" record-hint --tier <n>`.
-   Tell them it's recorded and that hints are data, not failure — a stage
-   with honest tier-2s teaches more than a bypassed gate.
+3. **Diagnose before hinting.** Ask one question — "what have you tried, and
+   where exactly does it break?" Articulating that often unblocks with no hint
+   at all; record nothing in that case. If the blocker is tooling trivia
+   unrelated to the learning goal — a compiler flag, an import path — answer it
+   outright. The contract protects design decisions, not toil.
 
-5. End by handing the problem back: one concrete next action *they* will
-   take, phrased as their move, not yours.
+4. **Deliver tier 1 and stop there.** Escalate to tier 2 only on a follow-up
+   ask, and to tier 3 only once tier 2 has demonstrably failed to land — not
+   because they asked for "just the pseudocode" up front.
+
+5. **Record every tier you delivered**: `state.py record-hint --tier <n>`. Say
+   that you recorded it. An honest tier-2 count is worth more to the next
+   roadmap than a clean one that was bluffed, because the profile carries hint
+   counts into the evidence for every concept this step touches.
+
+6. **Hand the problem back.** End on one concrete next action, phrased as the
+   learner's move rather than yours.
