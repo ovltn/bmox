@@ -21,7 +21,11 @@ every branch below is on the mode.
 1. **Machine gate.** What counts as reality answering is modes.md's `observed`
    row, one column per mode:
 
-   - **build** — `make test`, plus `make grade` if the project wires one. Red:
+   - **build** — `make test`, then `make grade`. A `grade` that fails saying
+     `no external grader is wired` is not a red gate: this project has none, so
+     `make test` alone decides. Any other non-zero exit is red. Make collapses
+     every recipe failure onto one exit status, so that phrase is the only thing
+     separating the two — read it, do not infer from the code. Red:
      report which assertions failed and what each failure means at the *spec*
      level. Do not walk their code line by line unless they ask, and never
      repair it — contract.md's never-write list covers "fixed" versions. If the

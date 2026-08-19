@@ -3,9 +3,8 @@
 For build steps only. Probe predictions live in `TRACES/`, operate
 hypotheses in `RUNBOOK/`.
 
-Each entry is written BEFORE implementing. 150–300 words: data structure,
-threading/IO model, crash behavior, what I'm deliberately not doing. This
-file is the real artifact of the repo.
-
-## Step 1
-<!-- written by me, the learner, not the agent -->
+One entry per build step, appended when the step opens and filled in BEFORE
+implementing — a decision written down after the code is a description of what I
+did, not a prediction that could have come out wrong. The headings arrive with
+the step; the words under them are mine. This file is the real artifact of the
+repo.

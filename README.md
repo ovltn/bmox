@@ -63,9 +63,10 @@ planned → ready → predicted → observed → explained → done
 
 Reality — green tests, the real source, the live system — stays locked until
 your prediction is on record: `record-commitment` refuses to advance a step
-from `ready` to `predicted` unless its commitment artifact has grown by 400
-bytes since the step opened, so there's always a written, falsifiable claim
-before you look.
+from `ready` to `predicted` until the commitment artifact has gained 400
+non-whitespace characters of prose that is not the template's own blanks, not
+one repeated character, and not a paragraph carried forward from an earlier
+step — so there's always a written, falsifiable claim before you look.
 
 Stored in **your repo**, mutated only by `scripts/state.py`: `.bmox/state.json`
 holds project and step progress, `.bmox/profile.json` holds what you've

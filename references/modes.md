@@ -69,12 +69,33 @@ artifact *first*, and run `open-step` after. In that order:
 2. `state.py open-step N --mode <mode> --artifact <path> …`
 3. Hand the learner the file and stop.
 
-`open-step` records how large the artifact is at that moment, and
-`record-commitment` weighs the artifact against that record. So every byte
-written before the step opens is scaffolding, and every byte after it is
-credited to the learner's prediction. Scaffold the template afterwards and your
-own headings pay most of the gate's price, leaving the learner a sentence to
-clear a bar built to demand a falsifiable claim.
+`open-step` snapshots the artifact as it stands at that moment, and
+`record-commitment` weighs only what the learner added on top of it. So
+everything written before the step opens is scaffolding, and everything after it
+is credited to the learner's prediction. Scaffold the template afterwards and
+your own headings pay most of the gate's price, leaving the learner a sentence
+to clear a bar built to demand a falsifiable claim.
+
+## The hint ladder is held, not filed
+
+The ladder that [`contract.md`](contract.md) has you author as the step opens
+stays in the conversation — that file defines the tiers and owns when each one
+may be delivered. Do not write the ladder into any file.
+
+A ladder on disk is a ladder already delivered. The learner opens the brief to
+read the goal and reads tier 3 on the way past; nothing was requested, so
+nothing is recorded, and the step's log claims an unhinted solve. That is a
+self-spoiler before it is an accounting bug: the learner defeats their own step
+by following your instructions. Collapsing it does not help — `<details>` is
+closed only in a rendered viewer, and a brief gets read in a terminal, an
+editor, or `cat`, where it is plaintext.
+
+Holding costs something: a ladder does not survive a session boundary, so a
+later session re-authors it from the tiers in `contract.md`. That is cheap
+beside the alternative, which spends the step to save you a paragraph.
+
+The rule generalizes past hints: anything the contract owes the learner later
+cannot be parked in a file they read now.
 
 ## build
 
@@ -89,9 +110,7 @@ appended per build step.
 **You supply**, before the learner starts:
 
 - The step brief at `<project>/STEPS/NN-<slug>.md`: the goal, the decision this
-  step forces, the definition of done, and a three-tier hint ladder in
-  collapsed `<details>` blocks. The tiers are defined in
-  [`contract.md`](contract.md).
+  step forces, and the definition of done.
 - Failing tests, including at least one malformed or hostile input case. Run
   them and show they fail for the right reason.
 
@@ -129,8 +148,21 @@ storage layer". A topic has no endpoint, so no prediction can be checked
 against it.
 
 **You supply** the question, the artifact skeleton, and — once the phase is
-`predicted` — the coordinates: repository, files, entry-point function names,
-and the order to read them.
+`predicted` — the coordinates: a repository pinned to a tag or a commit, files,
+entry-point symbol names, and the order to read them.
+
+Pin the revision; never point at a branch. `trunk` moves, and a file that has
+since changed directory or language takes the path with it — the learner gets a
+404 where you promised the mechanism lives. Then **verify each coordinate
+resolves at that revision before handing any of them over**: fetch it and `grep`
+for every symbol you are about to name. Search results and page summaries are
+where stale paths and invented line numbers come from, and both read exactly as
+confidently as a correct coordinate.
+
+**Name no line numbers.** They rot faster than anything else in a coordinate,
+they are the one part a `grep` for the symbol reconstructs in a second, and a
+number nobody verified drops the learner into unrelated code with no way to tell
+that is what happened.
 
 **You do not supply** what is at those coordinates: no summary, no "you'll see
 that it…", no preview of the answer.
@@ -141,6 +173,14 @@ that it…", no preview of the answer.
 > "start at `KafkaApis.handleProduceRequest`." It may not say "which
 > batches the records and then appends to the log." Coordinates are
 > yours to give; conclusions are the learner's to reach.
+
+That rule is also why a bad coordinate costs more in this mode than anywhere
+else. The coordinate is the *only* thing you hand over, so its correctness is
+the whole of your contribution — and when it is wrong the learner has no cheap
+way to find out. Their default reading of "nothing here matches" is that they
+are lost in real code, because that is the reading the whole setup invites; the
+map is the last thing a novice suspects. Every minute spent doubting themselves
+is a minute not spent on the mechanism.
 
 **Commitment template** — written into the trace file before the step opens,
 numbered hops for the learner to extend as far as they think the path runs:
@@ -158,10 +198,38 @@ numbered hops for the learner to extend as far as they think the path runs:
 
 ### Hop 2
 - …
+
+## Actual path
+
+One block per hop the source actually takes, in source order. Number them to
+match the prediction where they correspond, and mark the ones nothing predicted.
+
+### Hop 1 — predicted / not predicted
+- Component:
+- Data structure:
+- What happens here:
+- Read at (file and symbol):
+- Against my prediction:
+
+### Hop 2 — predicted / not predicted
+- …
+
+## Trace diff
+
+- Hops I predicted that do not exist:
+- Hops that exist and I did not predict:
+- The prediction I was most wrong about, and what made me believe it:
 ```
 
 The hop count is itself a prediction. A missing hop is one of the most common
-and most useful ways to be wrong.
+and most useful ways to be wrong — which is why the actual path is numbered
+independently and hops the prediction never mentioned get a block of their own,
+rather than being quietly absorbed into a hop that was predicted.
+
+Both halves ship in the skeleton. The per-hop *Against my prediction* line is
+what `/bmox:check`'s machine gate reads; leave these headings out and the
+learner invents the structure they are graded on, at learner-byte prices — the
+accounting above, inverted.
 
 **Reconcile question:** *"Where were you wrong, and why did you believe that?"*
 The wrong hops are the payload, not the right ones — steer the whole
@@ -198,11 +266,39 @@ If I <the failure to be injected>, I predict:
 - the log shows ___
 - metric ___ moves ___ (direction and rough size)
 - recovery takes ___ seconds
+
+## What actually happened
+
+One line per hypothesis blank, in the same order, each naming where it was read.
+
+- the client saw ___
+- the log showed ___
+- metric ___ moved ___
+- recovery took ___
+- what I did not predict at all: ___
+
+## How this gets detected
+
+- The signal that moves first: ___
+- The alert or query that catches it in production: ___
+- What it looks like while it is degrading but not yet worth waking anyone: ___
+
+## At 3am
+
+- First thing to check, and where: ___
+- The action that stops the bleeding: ___
+- The plausible action that makes it worse: ___
+- What stops it recurring: ___
 ```
 
-Every blank names an observable and where to read it. "It will break" is not a
-hypothesis — it cannot come out false, so nothing can be learned from it, and
-the machine gate rejects it.
+Every blank in the hypothesis names an observable and where to read it. "It will
+break" is not a hypothesis — it cannot come out false, so nothing can be learned
+from it, and the machine gate rejects it.
+
+The three sections after it are the same shape as the reconcile question, so the
+runbook can answer it in writing rather than in chat, and they ship as blanks
+for the same reason the hypothesis does: their headings are scaffolding when you
+write them now and the learner's work when they have to invent them later.
 
 **Reconcile question:** *"What would page you, and what do you do at 3am?"* An
 entry that cannot answer both halves is an experiment write-up, not a runbook.

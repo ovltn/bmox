@@ -33,15 +33,20 @@ Every `state.py` below means
 3. **Interview.** curriculum.md's *Interview* — three questions, no more. One
    question per message, and wait for each answer before sending the next;
    asked together they get answered together, briefly. The time budget answer
-   is not just a number: resolve it against curriculum.md's *Structural rules*,
-   and do so before moving to the next question.
+   is not just a number: resolve it against curriculum.md's *Structural rules*
+   into a band and what that band buys, and do so before moving to the next
+   question.
 
 4. **Calibrate** per curriculum.md's *Calibration* — four to six questions, one
    per message. Say aloud which concepts you are skipping and on what evidence.
-   Record every answer with the `record-evidence` invocation curriculum.md
-   gives: `--source calibration`, and the learner's answer **verbatim** in
-   `--note`. Your grade goes in `--outcome`; their words go in the note,
-   unedited, even when the answer is short or wrong.
+   Record every answer with the invocations curriculum.md gives, grading as you
+   go: their words go in the note **verbatim**, unedited, even when the answer
+   is short or wrong, and a `partial` or `none` also gets a gap recorded, in
+   their words too. Those gaps are what step 6 aims steps at; on a first project
+   they are the only ones the profile will hold. Attribute the evidence to this
+   project's `{{TECH}}` name (*Placeholders* below) — the same string step 7
+   passes to `new-project`, because two spellings leave the profile holding two
+   unrelated projects.
 
 5. **Research** per curriculum.md's *Research before drafting a single step*.
    Collect 4–8 primary links for `RESOURCES.md`.
@@ -63,12 +68,16 @@ Every `state.py` below means
      unfinished before they have written a line.
    - Write the approved roadmap into `ROADMAP.md` and the links into
      `RESOURCES.md`.
-   - Wire `make test` to the project's test runner, and `make grade` to the
-     external grader if you found one. `make test` is build's machine gate in
+   - Wire `make test` to the project's test runner — or, where the roadmap has
+     no build step, to the failing command the table names — and `make grade` to
+     the external grader if you found one. `make test` is build's machine gate in
      `/bmox:check`: leave it unwired and every build step passes that gate over
      an empty repo.
    - Register:
      `state.py new-project <tech> --language <lang> --goal "<capability>" --steps <N>`.
+     `--language` is required and takes the same string as `{{LANGUAGE}}`, `n/a`
+     included — a language invented here to satisfy the flag contradicts the
+     roadmap the learner just approved.
    - Leave `DESIGN.md` and `NOTES.md` empty beyond their headers. Those are the
      learner's files.
 
@@ -90,9 +99,9 @@ Every `{{PLACEHOLDER}}` in `assets/templates/project/` is one of these.
 | `{{TECH}}` | the technology, lowercase — also the directory name |
 | `{{GOAL}}` | the capability from the interview, the same string you pass to `new-project --goal` |
 | `{{LANGUAGE}}` | the interview's language answer, or `n/a` when no step is a build step |
-| `{{DEPTH}}` | what the band reaches, per curriculum.md's *Structural rules* — derived from the time budget, never asked for |
+| `{{DEPTH}}` | what this roadmap's band and mode mix reach, per curriculum.md's *What the band buys* — derived from the time budget and the approved draft, never asked for |
 | `{{TEST_CMD}}` | the test runner for the step in `$(STEP)`, e.g. `go test ./... -run Step$(STEP)`; when the roadmap has no build step, a command that exits non-zero |
-| `{{GRADER}}` | the external grader's command, or `none` |
+| `{{GRADER}}` | the command `make grade` runs to invoke the external grader you found — the Makefile executes it, so a URL or a description of one is a broken target — or the word `none`, which makes that target exit non-zero reporting that nothing was graded |
 | `{{TOTAL}}` | the step count |
 | `{{N}}` | a step number: `0` in the project status line, since no step is open yet; the step's own number in a roadmap entry |
 | `{{TITLE}}` | that step's title |

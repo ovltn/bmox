@@ -25,11 +25,12 @@ Every `state.py` below means
    is answered with questions — what do you expect to happen, and what would
    surprise you — never by supplying a blank's content.
 
-2. **Read the ladder if this mode has one.** A build step's brief at
-   `<project>/STEPS/NN-<slug>.md` carries a pre-authored three-tier ladder;
-   deliver from it rather than improvising. Probe and operate steps have no
-   ladder file — take their tiers from the mode's column in contract.md's
-   table.
+2. **Use the ladder you authored when the step opened.** It is held in the
+   conversation and never on disk — [`modes.md`](../../references/modes.md)
+   says why. If the step opened in an earlier session and the ladder went with
+   it, re-author all three tiers from the mode's column in contract.md's table
+   *before* you answer, so the escalation policy is set ahead of the ask rather
+   than during it.
 
 3. **Diagnose before hinting.** Ask one question — "what have you tried, and
    where exactly does it break?" Articulating that often unblocks with no hint

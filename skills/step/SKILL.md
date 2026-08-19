@@ -37,16 +37,43 @@ Every `state.py` below means
    ones an eager agent hands over early. Its *You do not supply* list is not
    yours at any point.
 
+   Where *You supply* has you run the new tests, name the step —
+   `make test STEP=N`. Nothing on disk knows step N exists until step 6, so a
+   bare `make test` resolves to the last step that was opened, runs the previous
+   step's tests, and reports them green; modes.md's obligation to show the new
+   ones failing for the right reason then goes undemonstrated.
+
+   Author this step's hint ladder here too, from contract.md's tiers, and keep it
+   in the conversation rather than in any file — modes.md's *The hint ladder is
+   held, not filed* says why.
+
 4. **Compute the artifact path.** The mode's **Artifact** line in modes.md
    gives it. `NN` is the step number zero-padded to two digits; `<slug>` is the
    roadmap title lowercased and hyphenated — `03-sparse-index`.
 
 5. **Write the commitment template into that artifact.** Copy the chosen mode's
    *Commitment template* from modes.md: append it to `DESIGN.md`, or create the
-   trace or runbook file carrying it. Copy it as it stands — filling one blank,
-   even as an example, even the easy one, is writing the learner's commitment,
-   which contract.md's never-write list puts beside writing their
-   implementation.
+   trace or runbook file carrying it.
+
+   **The title line is yours to fill in.** It names what you already settled in
+   step 3 — the traversal a probe follows, the failure an operate step injects,
+   the roadmap title a build entry sits under — and modes.md hands each of those
+   choices to you. Copied literally, a shipped `# Runbook 02 — <the failure>`
+   leaves a placeholder standing where an answer only you have belongs, and the
+   learner cannot tell whether the choice is theirs to make. Naming the failure
+   or the traversal is not naming the injection command or the source
+   coordinates: contract.md's *Withholding reality* keeps those back until the
+   phase is `predicted`, and a hypothesis about a failure nobody named is not a
+   hypothesis at all.
+
+   **Every blank below the title line is the learner's**, and those you copy
+   exactly as modes.md writes them. Each one asks for a claim about what will
+   happen, and that claim is the commitment: contract.md's never-write list puts
+   filling one beside writing their implementation, and each mode's *You do not
+   supply* list says the same in that mode's own terms. A blank that asks them to
+   restate something you put in the title is not an exception — a prediction has
+   to say what it is a prediction about, and saying it is part of predicting.
+   Filling one as an example, even the easy one, spends the step.
 
 6. **Then open the step**, and not before step 5 has written the file:
 
@@ -66,11 +93,29 @@ Every `state.py` below means
    correct. Explain the lifecycle and finish the open step; contract.md's
    *State discipline* is not negotiable in either direction.
 
-7. **Hand over and stop.** Point at the artifact and at whatever step 3
-   produced, tell the learner to write their prediction into the artifact and
-   then run `state.py record-commitment`, and mention `/bmox:hint`. Then stop —
-   no starter code, no sketch of what hop 1 will be, no worked example of a
-   blank. An example is the answer at one remove.
+7. **Hand over and stop.** Point at the artifact and at the materials step 3
+   stood up, and tell the learner three things about it:
+
+   - **Add to the template; do not write over it.** The template's headings and
+     the prompt inside each blank stay where they are, and the prediction goes
+     beneath them. The gate weighs how much the file grew after `open-step`, so
+     a long prompt overwritten with a terser real answer can leave the file
+     *smaller* than it started, and `record-commitment` then refuses a genuine
+     prediction. Writing beneath the prompt also keeps the question legible,
+     which is what they need when they come back to see whether they were right.
+   - **What clears the gate:** one specific, falsifiable claim in every blank
+     that asks what they *expect*, a sentence or two each — two or three hundred
+     words by the time the template is full, which is several times what the gate
+     needs. Blanks that record what reality did are due later and wait for it.
+     `record-commitment` names the exact threshold if it ever refuses, so do not
+     hand that number over as a target: writing to a byte count produces filler,
+     and filler cannot come out false, which is the one thing the bar exists to
+     demand.
+   - **Then `state.py record-commitment`**, and `/bmox:hint` if they stall before
+     that.
+
+   Then stop — no starter code, no sketch of what hop 1 will be, no worked
+   example of a blank. An example is the answer at one remove.
 
 ## Withholding reality
 

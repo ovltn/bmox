@@ -20,15 +20,23 @@ means per mode is defined in references/modes.md.
 
 Rules enforced here:
   * `predicted` is a hard precondition for reality. A step's commitment
-    artifact must grow by MIN_COMMITMENT_GROWTH bytes before the phase
-    advances, which is what stops probe and operate from degrading into
-    reading the answer. In build the same ordering is enforced by physics.
+    artifact must gain MIN_COMMITMENT_GROWTH non-whitespace characters of
+    prose that is not a template blank, not one character repeated, and not
+    already elsewhere in the file, which is what stops probe and operate from
+    degrading into reading the answer. In build the same ordering is enforced
+    by physics.
+  * `observed` is a hard precondition for explaining. build gets that gate
+    from `make test`; probe and operate get it from the shape of their own
+    artifact, checked at mark-observed.
   * You cannot reach `done` without passing through `explained`. Skipping
     requires --force, recorded permanently as "gate_bypassed".
   * Steps complete in order: each one motivates the next. A skipped step
-    counts as closed.
+    counts as closed, and records the phase it was abandoned at — changing
+    your mind mid-step is a legal exit, not a bypassed gate.
   * Hints are recorded with their tier; they are data, not shame.
-  * Every mutation is appended to an audit log inside the state file.
+  * Every mutation is appended to an audit log inside the state file, under an
+    exclusive lock, so two overlapping invocations cannot lose one another's
+    entry.
 
 Usage:
   state.py init
@@ -44,15 +52,19 @@ Usage:
   state.py complete-step [--force]
   state.py skip-step N --reason R
   state.py replan --steps N [--goal G]
-  state.py record-evidence --concept C --outcome {reconciled,partial,none} --note N [--source {step,calibration}]
-  state.py record-gap --concept C --note N
+  state.py record-evidence --concept C --outcome {reconciled,partial,none} --note N [--source {step,calibration}] [--project NAME]
+  state.py record-gap --concept C --note N [--project NAME]
   state.py resolve-gap --concept C --gap ID
   state.py profile show
   state.py profile alias CONCEPT ALIAS
 """
 import argparse
+import contextlib
+import difflib
+import fcntl
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -74,12 +86,24 @@ def state_path() -> str:
     return os.path.join(bmox_dir(), "state.json")
 
 
+def lock_path() -> str:
+    return os.path.join(bmox_dir(), ".lock")
+
+
+def baselines_path() -> str:
+    return os.path.join(bmox_dir(), "baselines.json")
+
+
 def resolve_artifact(path: str) -> str:
     """Learner-supplied paths are relative to their repo root, not to cwd."""
     return path if os.path.isabs(path) else os.path.join(project_root(), path)
 
 
 SCHEMA_VERSION = 2
+
+# The unit is non-whitespace characters *added* to the commitment artifact, not
+# bytes in it: 420 newlines, 600 spaces and one letter repeated 400 times are
+# each 400+ bytes and none of them is a falsifiable claim.
 MIN_COMMITMENT_GROWTH = 400
 
 PHASES = ["planned", "ready", "predicted", "observed", "explained", "done"]
@@ -103,6 +127,12 @@ TRANSITIONS = {
     "complete-step":     ("explained", "done"),
 }
 
+# Every field an accessor in this file indexes without a default. A state file
+# is documented as hand-repairable, so a repair that drops one of these has to
+# come back as a sentence rather than as a KeyError from whichever command
+# reached the damage first.
+STEP_FIELDS = ("number", "phase", "commitment", "hints")
+
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -113,15 +143,127 @@ def die(msg: str, code: int = 1):
     sys.exit(code)
 
 
+RECOVER = "Restore from git — it should be committed."
+
+
+# ------------------------------------------------------------------- locking
+
+@contextlib.contextmanager
+def state_lock(exclusive: bool = True):
+    """Serialize load -> mutate -> save on .bmox/.lock.
+
+    Every command is a read-modify-write of one JSON document, so without a
+    lock two overlapping invocations both read the same state and the second
+    rename silently discards the first one's mutation *and its audit entry*,
+    with both processes exiting 0. A lost audit entry is worse than a lost
+    counter: the log is the only record that a hint was taken.
+
+    The lock is never held across a call into knowledge.py. Holding it there
+    would put this process in the state-then-profile order that knowledge.py's
+    own lock has to be acquired in, and a single missed ordering — or a profile
+    lock that happens to live on this same file — turns into a deadlock the
+    learner can only escape with a kill. Read the state, release, then touch
+    the profile: the ordering rule cannot then be violated at all.
+    """
+    directory = bmox_dir()
+    if not exclusive and not os.path.isdir(directory):
+        # A read-only command must not conjure .bmox/ just to lock it; there is
+        # nothing yet to serialize against, and load() reports the absence.
+        yield
+        return
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd = os.open(lock_path(), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        die(f"cannot use {directory} ({e.strerror}). bmox keeps its state in "
+            f"the project directory named by CLAUDE_PROJECT_DIR, which must be "
+            f"a writable directory.")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        yield
+    finally:
+        os.close(fd)
+
+
+# ------------------------------------------------------------------- storage
+
+def _write_json(path: str, payload: dict):
+    """Atomic write: temp file + rename, so a crash never corrupts the file.
+
+    Both fsyncs matter and neither is redundant. Without the file fsync the
+    rename can reach disk before the bytes it points at, so a power loss lands
+    an empty state.json instead of the previous good one — worse than the crash
+    it was meant to survive. Without the directory fsync the rename itself can
+    be the thing that is lost. The unlink is what keeps an interrupted save
+    from leaving .tmp files behind in a directory the learner commits.
+    """
+    directory = os.path.dirname(path)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2, sort_keys=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            tmp = None
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+    except OSError as e:
+        die(f"cannot write {path} ({e.strerror}). bmox keeps its state in the "
+            f"project directory named by CLAUDE_PROJECT_DIR, which must be a "
+            f"writable directory.")
+
+
+def _validate(state: dict):
+    def corrupt(what: str):
+        die(f"state.json is corrupt ({what}). {RECOVER}")
+
+    if not isinstance(state.get("current"), dict):
+        corrupt("no 'current' object at the top level")
+    if not isinstance(state.get("projects"), dict):
+        corrupt("no 'projects' object at the top level")
+    for name, proj in state["projects"].items():
+        if not isinstance(proj, dict):
+            corrupt(f"project '{name}' is not an object")
+        if not isinstance(proj.get("steps"), dict):
+            corrupt(f"project '{name}' has no 'steps' object")
+        if not isinstance(proj.get("steps_total"), int):
+            corrupt(f"project '{name}' has no whole-number 'steps_total'")
+    # Checked here rather than at each reader so that `status` and every
+    # mutating command give the same verdict on the same file. Split between
+    # readers, the one command a learner runs to find out what is wrong is the
+    # one that can report the damage as ordinary progress.
+    cur = state["current"].get("project")
+    if cur is not None and cur not in state["projects"]:
+        die(f"state.json names '{cur}' as the current project, but no such "
+            f"project is registered. {RECOVER} Or pick a project that exists: "
+            f"state.py focus NAME")
+
+
 def load() -> dict:
     path = state_path()
     if not os.path.exists(path):
         die(f"no state file at {path}. Run: state.py init")
-    with open(path) as f:
-        try:
+    try:
+        with open(path, encoding="utf-8") as f:
             state = json.load(f)
-        except json.JSONDecodeError as e:
-            die(f"state.json is corrupt ({e}). Restore from git — it should be committed.")
+    except ValueError as e:
+        die(f"state.json is corrupt ({e}). {RECOVER}")
+    except OSError as e:
+        die(f"cannot read {path} ({e.strerror}). state.json must be a readable "
+            f"file. {RECOVER}")
+    if not isinstance(state, dict):
+        die(f"state.json is corrupt (its top level is not an object). {RECOVER}")
     found = state.get("schema_version")
     if found != SCHEMA_VERSION:
         have = f"schema v{found}" if found is not None else "unversioned"
@@ -129,6 +271,7 @@ def load() -> dict:
             f"There is no upgrade path: archive {path} and run state.py init, then "
             f"re-register your projects. Finished work stays in your repo and its git "
             f"history — only the progress record restarts.")
+    _validate(state)
     return state
 
 
@@ -143,14 +286,49 @@ def load_profile() -> dict:
 
 
 def save(state: dict):
-    """Atomic write: temp file + rename, so a crash never corrupts state."""
-    directory = bmox_dir()
-    os.makedirs(directory, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(state, f, indent=2, sort_keys=False)
-        f.write("\n")
-    os.replace(tmp, state_path())
+    _write_json(state_path(), state)
+
+
+def read_artifact(path: str):
+    """None when the artifact cannot be read at all.
+
+    errors="replace" because a learner's artifact is whatever their editor
+    wrote, and a stray byte in a markdown file is not a reason to answer a
+    lifecycle command with a UnicodeDecodeError.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def load_baselines() -> dict:
+    """The commitment artifact's text as of open-step, keyed '<project>/step_N'.
+
+    Kept beside state.json rather than inside it: state.json is the file the
+    learner is told to hand-repair and restore from git, and a multi-kilobyte
+    escaped copy of DESIGN.md wedged into the middle of it would end that. Only
+    one entry exists at a time — it is dropped the moment the commitment it
+    measures is recorded.
+
+    Damage here is never worth refusing over: this is a cache of a file the
+    learner still has, and losing it degrades record-commitment to its byte
+    fallback rather than blocking the step.
+    """
+    path = baselines_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_baselines(baselines: dict):
+    _write_json(baselines_path(), baselines)
 
 
 def audit(state: dict, event: str, **details):
@@ -158,12 +336,10 @@ def audit(state: dict, event: str, **details):
 
 
 def current(state: dict):
-    cur = state.get("current") or {}
+    cur = state["current"]
     proj = cur.get("project")
     if not proj:
         die("no current project. Run: state.py new-project NAME ... or state.py focus NAME")
-    if proj not in state["projects"]:
-        die(f"current project '{proj}' missing from projects map (state corrupted?)")
     return proj, state["projects"][proj]
 
 
@@ -172,9 +348,23 @@ def cur_step(project: dict) -> dict:
     if n is None:
         die("no active step. Run: state.py open-step N")
     key = f"step_{n}"
-    if key not in project["steps"]:
-        die(f"{key} not found")
-    return project["steps"][key]
+    step = project["steps"].get(key)
+    if step is None:
+        die(f"state.json says {key} is open, but no such step is recorded. {RECOVER}")
+    if not isinstance(step, dict):
+        die(f"state.json is corrupt ({key} is not an object). {RECOVER}")
+    missing = [f for f in STEP_FIELDS if f not in step]
+    if missing:
+        die(f"state.json is corrupt ({key} is missing {', '.join(missing)}). {RECOVER}")
+    if not isinstance(step["hints"], dict):
+        die(f"state.json is corrupt ({key} has no 'hints' object). {RECOVER}")
+    if not isinstance(step["commitment"], dict):
+        die(f"state.json is corrupt ({key} has no 'commitment' object). {RECOVER}")
+    return step
+
+
+def hint_total(step: dict) -> int:
+    return sum(v for v in step.get("hints", {}).values() if isinstance(v, int))
 
 
 def check_artifact(mode: str, artifact: str):
@@ -201,7 +391,352 @@ def require_phase(step: dict, action: str) -> str:
     return want_to
 
 
+# --------------------------------------------------------- artifact content
+
+# The commitment gate reads a file the learner controls completely, so the
+# question is never "is there text" but "is this text a prediction". These are
+# the shapes that clear any length check while committing to nothing: the
+# template's own blanks, one character repeated, and the previous step's note
+# pasted forward.
+PLACEHOLDER_RE = re.compile(r"_{3,}|<[a-z][a-z ,.'\-]+>")
+# Generics and paths live in code spans, and `Vec<u8>` is not an unfilled
+# blank. Stripping spans first is what lets the placeholder pattern stay simple
+# enough to be tolerant of prose.
+CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
+HOP_RE = re.compile(r"^hop\s*#?\s*(\d+)")
+
+MIN_DISTINCT_CHARS = 10
+MAX_DUPLICATED_SHARE = 0.4
+# Lines this short are structure — `- Component:`, a heading, a bullet marker —
+# and structure repeats across steps by design, so it cannot count as either
+# content or duplication.
+SUBSTANTIVE_LINE = 20
+# A hop or bullet carrying less than this after its labels is a template stub
+# the learner never extended, not an unanswered question.
+FILLED_FIELD = 10
+
+
+def nonspace(text: str) -> int:
+    return sum(1 for ch in text if not ch.isspace())
+
+
+def _norm(line: str) -> str:
+    return " ".join(line.split()).lower()
+
+
+def added_lines(baseline: str, current_text: str) -> list:
+    """The lines this step is credited for: what the artifact holds now and its
+    state at open-step does not account for.
+
+    A line diff rather than a suffix comparison because a template is filled in
+    place as often as it is appended to, and a suffix comparison credits the
+    learner nothing for either.
+    """
+    before = baseline.splitlines()
+    after = current_text.splitlines()
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    out = []
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("insert", "replace"):
+            out.extend(after[j1:j2])
+    return out
+
+
+def duplicated_share(added: list, baseline: str) -> float:
+    """How much of the addition's prose already stood somewhere in the file.
+
+    DESIGN.md is one append-only file across every build step, so the cheapest
+    way past a length check is to paste the previous step's note under a new
+    heading. The same tally catches a paragraph pasted twice inside one
+    addition, because a line becomes "already there" as soon as it is counted.
+
+    Measured against the addition's substantive lines rather than all of it, so
+    that padding the paste with blank lines and headings cannot dilute the
+    ratio below the threshold.
+    """
+    seen = {_norm(line) for line in baseline.splitlines()
+            if nonspace(line) >= SUBSTANTIVE_LINE}
+    duplicated = 0
+    substantive = 0
+    for line in added:
+        weight = nonspace(line)
+        if weight < SUBSTANTIVE_LINE:
+            continue
+        substantive += weight
+        key = _norm(line)
+        if key in seen:
+            duplicated += weight
+        else:
+            seen.add(key)
+    return duplicated / substantive if substantive else 0.0
+
+
+def gate_commitment(label: str, baseline: str, current_text: str) -> int:
+    """Weigh the addition and return its non-whitespace character count."""
+    added = added_lines(baseline, current_text)
+    text = "\n".join(added)
+    count = nonspace(text)
+    if count < MIN_COMMITMENT_GROWTH:
+        die(f"{label} has gained {count} non-whitespace characters since this "
+            f"step opened; {MIN_COMMITMENT_GROWTH} are required. Predicting "
+            f"before looking is the entire method — a guess you never wrote down "
+            f"cannot be wrong, and being wrong on the record is what makes the "
+            f"reading stick.")
+    blanks = sorted(set(PLACEHOLDER_RE.findall(CODE_SPAN_RE.sub(" ", text))))
+    if blanks:
+        die(f"{label} still carries the template's own blanks: "
+            f"{', '.join(blanks[:6])}. Each one is a question, and the answer is "
+            f"the prediction this gate exists to collect — fill it in, or delete "
+            f"the line if the question does not apply, then: "
+            f"state.py record-commitment")
+    distinct = len({ch.lower() for ch in text if not ch.isspace()})
+    if distinct < MIN_DISTINCT_CHARS:
+        die(f"what was added to {label} uses {distinct} distinct characters, "
+            f"which is filler rather than a sentence. The "
+            f"gate is not a length quota: it is here to make you name what you "
+            f"expect to happen, so that reality can contradict it.")
+    duplicated = duplicated_share(added, baseline)
+    if duplicated > MAX_DUPLICATED_SHARE:
+        die(f"{round(100 * duplicated)}% of what was added to {label} "
+            f"already stands elsewhere in that file. A prediction copied forward "
+            f"cannot be wrong about this step — write what you expect *here* to "
+            f"do, including where you expect it to break.")
+    return count
+
+
+# ------------------------------------------------------- observation gating
+
+def _sections(lines: list) -> list:
+    """(level, lowercased title, body lines) per heading, each body running to
+    the next heading at the same level or shallower."""
+    heads = []
+    for i, line in enumerate(lines):
+        m = HEADING_RE.match(line)
+        if m:
+            heads.append((i, len(m.group(1)), m.group(2).strip().lower()))
+    out = []
+    for pos, (i, level, title) in enumerate(heads):
+        end = len(lines)
+        for j, deeper, _t in heads[pos + 1:]:
+            if deeper <= level:
+                end = j
+                break
+        out.append((level, title, lines[i + 1:end]))
+    return out
+
+
+def _find_section(lines: list, *names):
+    """Matched on a substring of the heading text, so a deeper heading level or
+    a parenthesized aside still finds the section. The gate is here to catch an
+    unfilled artifact, not to police formatting."""
+    for _level, title, body in _sections(lines):
+        if any(name in title for name in names):
+            return body
+    return None
+
+
+def _hops(body: list) -> list:
+    return [(int(m.group(1)), hop_body)
+            for _level, title, hop_body in _sections(body)
+            if (m := HOP_RE.match(title))]
+
+
+def _field(body: list, label: str):
+    """The value written after `- Label:`, or None when that line is absent."""
+    for line in body:
+        stripped = line.strip().lstrip("-*• \t")
+        head, sep, rest = stripped.partition(":")
+        if sep and label in head.strip().lower():
+            return rest.strip().strip("*").strip()
+    return None
+
+
+def _value_chars(body: list) -> int:
+    """How much the learner wrote after the labels a template supplied."""
+    total = 0
+    for line in body:
+        stripped = line.strip().lstrip("-*• \t")
+        _head, sep, rest = stripped.partition(":")
+        if sep:
+            total += nonspace(rest)
+    return total
+
+
+def _is_filled(value) -> bool:
+    return (value is not None
+            and nonspace(value.replace("…", "")) >= 3
+            and not PLACEHOLDER_RE.search(value))
+
+
+def _is_bullet(line: str) -> bool:
+    return line.strip()[:2] in ("- ", "* ") or line.strip()[:2].startswith("•")
+
+
+def gate_probe(label: str, lines: list):
+    predicted = _find_section(lines, "predicted path")
+    actual = _find_section(lines, "actual path")
+    if predicted is None:
+        die(f"{label} has no 'Predicted path' section, so there is no prediction "
+            f"for reality to contradict. The trace skeleton in "
+            f"references/modes.md ships both halves; restore its headings and "
+            f"fill the predicted hops.")
+    if actual is None:
+        die(f"{label} has no 'Actual path' section. observed means the source has "
+            f"answered: one block per hop it actually takes, in source order.")
+    pred_hops = {n: body for n, body in _hops(predicted)
+                 if _value_chars(body) >= FILLED_FIELD}
+    if not pred_hops:
+        die(f"no hop under 'Predicted path' in {label} carries a prediction. Each "
+            f"hop names a component, a data structure, what happens there, and "
+            f"what could go wrong — the hop count is itself a prediction.")
+    # Every annotated block is checked rather than one per number, because two
+    # blocks numbered the same is exactly how a hop's annotation goes missing.
+    act_blocks = _hops(actual)
+    act_numbers = {n for n, _body in act_blocks}
+    missing = sorted(n for n in pred_hops if n not in act_numbers)
+    if missing:
+        die(f"{label} predicts hop {', '.join(f'{n}' for n in missing)} but "
+            f"annotates no such hop under 'Actual path'. A predicted hop that "
+            f"does not exist in the source is the most useful way to be wrong, "
+            f"and it only counts once it is written down as one.")
+    unanswered = sorted({n for n, body in act_blocks
+                         if (n in pred_hops or _value_chars(body) >= FILLED_FIELD)
+                         and not _is_filled(_field(body, "against my prediction"))})
+    if unanswered:
+        die(f"hop {', '.join(f'{n}' for n in unanswered)} under 'Actual path' in "
+            f"{label} has no 'Against my prediction:' line filled in. That line "
+            f"is the whole observation: reading the source without holding it "
+            f"against what you predicted leaves the wrong model in place.")
+
+
+def gate_operate(label: str, lines: list):
+    hypothesis = _find_section(lines, "hypothesis")
+    happened = _find_section(lines, "what actually happened", "what happened")
+    if hypothesis is None:
+        die(f"{label} has no 'Hypothesis' section, so nothing was committed for "
+            f"the injection to falsify. The runbook skeleton in "
+            f"references/modes.md ships it; restore its headings.")
+    if happened is None:
+        die(f"{label} has no 'What actually happened' section. observed means the "
+            f"failure was injected and read: one line per hypothesis blank, in "
+            f"the same order, each naming where it was read.")
+    open_blanks = PLACEHOLDER_RE.findall("\n".join(hypothesis))
+    if open_blanks:
+        die(f"the hypothesis in {label} still has {len(open_blanks)} unfilled "
+            f"blanks. Every blank names an observable and where to read it — "
+            f"'it will break' cannot come out false, so nothing can be learned "
+            f"from it.")
+    predicted = [line for line in hypothesis if _is_bullet(line) and nonspace(line) >= 5]
+    if not predicted:
+        die(f"the hypothesis in {label} predicts no observables. List what the "
+            f"client sees, what the log shows, which metric moves and by roughly "
+            f"how much, and how long recovery takes.")
+    filled = [line for line in happened
+              if _is_bullet(line) and nonspace(line) >= 15
+              and not PLACEHOLDER_RE.search(line)]
+    if len(filled) < len(predicted):
+        die(f"the hypothesis in {label} predicts {len(predicted)} observables but "
+            f"'What actually happened' records {len(filled)}. Each prediction "
+            f"needs the reading that confirms or contradicts it, and where it was "
+            f"read — a blank left there is the one the memory quietly reshapes to "
+            f"match.")
+
+
+def gate_observation(step: dict):
+    """A machine gate for probe and operate.
+
+    build's gate is `make test`'s exit code, which cannot be talked round. probe
+    and operate have no such physics, and without one the transition to observed
+    is the model deciding it is satisfied — which is enough to carry a whole step
+    to done, flagged reconciled, on an artifact of lorem ipsum. The artifact's
+    own structure is the substitute: mode-shaped, keyed to the sections the
+    templates ship, and an unfilled artifact is the only thing it refuses.
+    """
+    mode = step.get("mode")
+    if mode not in ("probe", "operate"):
+        return
+    artifact = step["commitment"].get("artifact")
+    if not artifact:
+        return
+    text = read_artifact(resolve_artifact(artifact))
+    if text is None:
+        die(f"cannot read the commitment artifact {artifact}. observed is a claim "
+            f"about what that file now records, so it has to be readable.")
+    lines = text.splitlines()
+    (gate_probe if mode == "probe" else gate_operate)(artifact, lines)
+
+
+# --------------------------------------------------------------- audit reads
+
+TRANSITION_EVENTS = ("open_step", "record_commitment", "mark_observed", "regress",
+                     "record_reconciled", "complete_step")
+
+
+def audit_flags(state: dict) -> list:
+    """Timings the audit log records that no other view surfaces.
+
+    A phase that advanced in the same second as the one before it, and a hint
+    ladder climbed inside one second, are the same finding: the record says
+    work happened where no time passed. Reported, never blocked — the log is
+    evidence for the learner to read, and a gate here would only teach whoever
+    tripped it to wait a second.
+    """
+    by_step = {}
+    for entry in state.get("audit", []):
+        if not isinstance(entry, dict):
+            continue
+        key = (entry.get("project"), entry.get("step"))
+        if key[0] is None or key[1] is None:
+            continue
+        by_step.setdefault(key, []).append(entry)
+
+    flags = []
+    for (proj, number), entries in by_step.items():
+        moves = [e for e in entries if e.get("event") in TRANSITION_EVENTS]
+        for before, after in zip(moves, moves[1:]):
+            if before.get("at") and before.get("at") == after.get("at"):
+                flags.append(f"{proj} step {number}: {before['event']} -> "
+                             f"{after['event']} in the same second "
+                             f"({before['at']})")
+        bursts = {}
+        for entry in entries:
+            if entry.get("event") == "hint":
+                bursts.setdefault(entry.get("at"), []).append(entry.get("tier"))
+        for at, tiers in bursts.items():
+            if len(tiers) >= 2:
+                shown = ", ".join(str(t) for t in sorted(t for t in tiers if t is not None))
+                flags.append(f"{proj} step {number}: {len(tiers)} hints in the "
+                             f"same second (tier {shown}) at {at}")
+    return flags
+
+
 # ---------------------------------------------------------------- commands
+
+GITIGNORE = """# state.json and profile.json are your progress and live nowhere
+# else, so this directory is committed on purpose. Only what is per-machine or
+# mid-write is excluded here.
+.lock
+.profile.lock
+*.tmp
+"""
+
+
+def write_gitignore():
+    """The advice to commit .bmox/ is what makes an ignore file necessary: two
+    lock files and a temp file live in there, none of them meaning anything on
+    another machine, and a directory committed wholesale takes them along."""
+    path = os.path.join(bmox_dir(), ".gitignore")
+    if os.path.exists(path):
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(GITIGNORE)
+    except OSError as e:
+        die(f"cannot write {path} ({e.strerror}). bmox keeps its state in the "
+            f"project directory named by CLAUDE_PROJECT_DIR, which must be a "
+            f"writable directory.")
+
 
 def cmd_init(_):
     if os.path.exists(state_path()):
@@ -215,12 +750,25 @@ def cmd_init(_):
     }
     audit(state, "init")
     save(state)
+    write_gitignore()
     print(f"initialized {state_path()}")
+
+
+def require_steps(count: int):
+    if count < 1:
+        die(f"--steps is {count}; a roadmap needs at least 1 step. A project with "
+            f"no steps registers as unusable: open-step refuses every number, and "
+            f"the only way out is state.py replan --steps N.")
 
 
 def cmd_new_project(args):
     state = load()
     name = args.name
+    if not name.strip():
+        die("the project name is blank. It is the handle every later command "
+            "takes — state.py focus NAME, and the '*' beside it in status — so a "
+            "name made of spaces leaves the focused project unnameable.")
+    require_steps(args.steps)
     if name in state["projects"]:
         die(f"project '{name}' already exists (use: focus {name})")
     state["projects"][name] = {
@@ -257,17 +805,18 @@ def cmd_open_step(args):
         die(f"step {n} out of range 1..{proj['steps_total']}")
     if n > 1:
         prev = proj["steps"].get(f"step_{n-1}")
-        if not prev or prev["phase"] != "done":
+        if not prev or prev.get("phase") != "done":
             die(f"step {n-1} is not done yet — steps complete in order. "
                 f"(This is the point: each step motivates the next.)")
     key = f"step_{n}"
-    if key in proj["steps"] and proj["steps"][key]["phase"] != "planned":
-        die(f"step {n} already opened (phase: {proj['steps'][key]['phase']})")
+    if key in proj["steps"] and proj["steps"][key].get("phase") != "planned":
+        die(f"step {n} already opened (phase: {proj['steps'][key].get('phase')})")
 
     artifact = args.artifact
     check_artifact(args.mode, artifact)
     resolved = resolve_artifact(artifact)
-    baseline = os.path.getsize(resolved) if os.path.exists(resolved) else 0
+    baseline = os.path.getsize(resolved) if os.path.isfile(resolved) else 0
+    text = read_artifact(resolved) if os.path.isfile(resolved) else ""
 
     proj["steps"][key] = {
         "number": n,
@@ -285,11 +834,16 @@ def cmd_open_step(args):
         "gate_bypassed": False,
         "skipped": False,
         "skip_reason": None,
+        "abandoned_at": None,
     }
     proj["current_step"] = n
     audit(state, "open_step", project=proj_name, step=n, mode=args.mode,
           title=args.title, artifact=artifact)
     save(state)
+    if text is not None:
+        baselines = load_baselines()
+        baselines[f"{proj_name}/{key}"] = text
+        save_baselines(baselines)
     print(f"[{proj_name}] step {n} '{proj['steps'][key]['title']}' [{args.mode}]: "
           f"planned -> ready")
     print(f"write your prediction into {artifact}, then: state.py record-commitment")
@@ -306,21 +860,45 @@ def cmd_record_commitment(_args):
     if not os.path.exists(path):
         die(f"commitment artifact {c['artifact']} does not exist. "
             f"Write your prediction there first — reality stays locked until it is on record.")
-    grown = os.path.getsize(path) - c["baseline_bytes"]
-    if grown < MIN_COMMITMENT_GROWTH:
-        die(f"{c['artifact']} has grown {grown} bytes since this step opened; "
-            f"{MIN_COMMITMENT_GROWTH} are required. Predicting before looking is "
-            f"the entire method — a guess you never wrote down cannot be wrong, "
-            f"and being wrong on the record is what makes the reading stick.")
+    text = read_artifact(path)
+    if text is None:
+        die(f"cannot read the commitment artifact {c['artifact']}. The gate weighs "
+            f"that one file, so it has to be a readable file.")
+    grown = os.path.getsize(path) - c.get("baseline_bytes", 0)
+    if grown < 0:
+        die(f"{c['artifact']} is {-grown} bytes smaller than when this step "
+            f"opened. The template headings are scaffolding and stay in place: "
+            f"write each prediction below its heading rather than over it, so "
+            f"the question you were answering is still legible when you come "
+            f"back to check whether you were right.")
+
+    baselines = load_baselines()
+    key = f"{proj_name}/step_{step['number']}"
+    baseline = baselines.get(key)
+    if baseline is None:
+        # A step opened before the artifact's text was snapshotted has only its
+        # byte count to be weighed against, and refusing it would strand a step
+        # already in flight.
+        if grown < MIN_COMMITMENT_GROWTH:
+            die(f"{c['artifact']} has grown {grown} bytes since this step opened; "
+                f"{MIN_COMMITMENT_GROWTH} are required. Predicting before looking is "
+                f"the entire method — a guess you never wrote down cannot be wrong, "
+                f"and being wrong on the record is what makes the reading stick.")
+        committed = grown
+    else:
+        committed = gate_commitment(c["artifact"], baseline, text)
+        baselines.pop(key, None)
+        save_baselines(baselines)
 
     c["recorded"] = now()
     c["growth_bytes"] = grown
+    c["committed_chars"] = committed
     step["phase"] = new_phase
     audit(state, "record_commitment", project=proj_name, step=step["number"],
-          artifact=c["artifact"], growth_bytes=grown)
+          artifact=c["artifact"], growth_bytes=grown, committed_chars=committed)
     save(state)
     print(f"[{proj_name}] step {step['number']}: ready -> predicted "
-          f"({grown} bytes committed). Reality is unlocked.")
+          f"({committed} non-whitespace characters committed). Reality is unlocked.")
 
 
 def cmd_record_hint(args):
@@ -330,16 +908,16 @@ def cmd_record_hint(args):
     if step["phase"] not in ("predicted", "observed"):
         die(f"hints are recorded between committing a prediction and reconciling it "
             f"(phase: {step['phase']})")
-    step["hints"][f"tier{args.tier}"] += 1
+    tier = f"tier{args.tier}"
+    step["hints"][tier] = step["hints"].get(tier, 0) + 1
     audit(state, "hint", project=proj_name, step=step["number"], tier=args.tier)
     save(state)
-    total = sum(step["hints"].values())
     print(f"[{proj_name}] step {step['number']}: tier-{args.tier} hint recorded "
-          f"(total this step: {total}). Hints are data, not failure.")
+          f"(total this step: {hint_total(step)}). Hints are data, not failure.")
 
 
 def _simple_transition(action, extra_msg=""):
-    def run(args):
+    def run(_args):
         state = load()
         proj_name, proj = current(state)
         step = cur_step(proj)
@@ -347,18 +925,26 @@ def _simple_transition(action, extra_msg=""):
         step["phase"] = new_phase
         if action == "record-reconciled":
             step["reconciled"] = True
-        details = {}
-        if action == "mark-observed" and getattr(args, "evidence", None):
-            details["evidence"] = args.evidence
-        audit(state, action.replace("-", "_"), project=proj_name,
-              step=step["number"], **details)
+        audit(state, action.replace("-", "_"), project=proj_name, step=step["number"])
         save(state)
         print(f"[{proj_name}] step {step['number']}: -> {new_phase}. {extra_msg}".rstrip())
     return run
 
 
-cmd_mark_observed = _simple_transition(
-    "mark-observed", "Do NOT advance: reconciling prediction against reality comes next.")
+def cmd_mark_observed(args):
+    state = load()
+    proj_name, proj = current(state)
+    step = cur_step(proj)
+    new_phase = require_phase(step, "mark-observed")
+    gate_observation(step)
+    step["phase"] = new_phase
+    details = {"evidence": args.evidence} if args.evidence else {}
+    audit(state, "mark_observed", project=proj_name, step=step["number"], **details)
+    save(state)
+    print(f"[{proj_name}] step {step['number']}: -> {new_phase}. Do NOT advance: "
+          f"reconciling prediction against reality comes next.")
+
+
 cmd_regress = _simple_transition(
     "regress", "Back to predicted — reality must be re-observed before reconciling.")
 cmd_record_reconciled = _simple_transition(
@@ -399,13 +985,14 @@ def cmd_skip_step(args):
         die(f"step {n} out of range 1..{proj['steps_total']}")
     if n > 1:
         prev = proj["steps"].get(f"step_{n-1}")
-        if not prev or prev["phase"] != "done":
+        if not prev or prev.get("phase") != "done":
             die(f"step {n-1} is not done yet — steps close in order.")
     key = f"step_{n}"
     existing = proj["steps"].get(key)
-    if existing and existing["phase"] not in ("planned", "ready"):
-        die(f"step {n} is in phase '{existing['phase']}'. A step can only be "
-            f"skipped before its commitment is recorded.")
+    if existing and existing.get("phase") == "done":
+        die(f"step {n} is already closed (phase 'done'); there is nothing left "
+            f"to skip. Closed steps are immutable — to change the shape of what "
+            f"remains, run: state.py replan --steps N")
     proj["steps"][key] = {
         "number": n,
         "title": (existing or {}).get("title") or f"step {n}",
@@ -421,11 +1008,20 @@ def cmd_skip_step(args):
         "gate_bypassed": False,
         "skipped": True,
         "skip_reason": args.reason,
+        # A step abandoned after its prediction was on record is a different
+        # event from one never started, and neither is a bypassed gate. Without
+        # this the only honest-looking exit from mid-step is --force, which
+        # brands the record with a bypass that never happened.
+        "abandoned_at": (existing or {}).get("phase"),
     }
     if proj.get("current_step") == n:
         proj["current_step"] = None
-    audit(state, "skip_step", project=proj_name, step=n, reason=args.reason)
+    audit(state, "skip_step", project=proj_name, step=n, reason=args.reason,
+          abandoned_at=(existing or {}).get("phase"))
     save(state)
+    baselines = load_baselines()
+    if baselines.pop(f"{proj_name}/{key}", None) is not None:
+        save_baselines(baselines)
     print(f"[{proj_name}] step {n} skipped: {args.reason}")
     print("Recorded and shown in status. Skipping is a choice, not a failure.")
 
@@ -434,13 +1030,16 @@ def cmd_replan(args):
     state = load()
     proj_name, proj = current(state)
     if proj.get("current_step") is not None:
-        die(f"step {proj['current_step']} is in flight. Finish, skip, or let it "
-            f"close before replanning — a roadmap cannot be re-derived around a "
-            f"step whose outcome is not yet known.")
-    closed = sum(1 for s in proj["steps"].values() if s["phase"] == "done")
+        n = proj["current_step"]
+        die(f"step {n} is in flight. Close it first — state.py complete-step to "
+            f"finish it, or state.py skip-step {n} --reason R to abandon it — "
+            f"because a roadmap cannot be re-derived around a step whose outcome "
+            f"is not yet known.")
+    closed = sum(1 for s in proj["steps"].values() if s.get("phase") == "done")
     if args.steps < closed:
         die(f"{closed} steps are already closed; --steps cannot be below that. "
             f"Closed steps are immutable.")
+    require_steps(args.steps)
     was = proj["steps_total"]
     proj["steps_total"] = args.steps
     if args.goal:
@@ -453,52 +1052,85 @@ def cmd_replan(args):
 
 def _step_context(state):
     """Tag evidence with the step that produced it, when one is open."""
-    proj_name = state.get("current", {}).get("project")
+    proj_name = state["current"].get("project")
     if not proj_name:
         return None, None, None, None
     proj = state["projects"][proj_name]
-    n = proj.get("current_step")
-    if n is None:
+    if proj.get("current_step") is None:
         return proj_name, None, None, None
-    step = proj["steps"][f"step_{n}"]
-    return proj_name, n, step.get("mode"), step.get("hints")
+    step = cur_step(proj)
+    return proj_name, step["number"], step.get("mode"), step.get("hints")
 
 
 def cmd_record_evidence(args):
-    state = load()
-    proj_name, step_n, mode, hints = _step_context(state)
+    with state_lock(exclusive=False):
+        state = load()
+        proj_name, step_n, mode, hints = _step_context(state)
     if args.source == "step" and step_n is None:
         die("no open step to attribute this evidence to. "
             "Use --source calibration for pre-roadmap answers.")
+    if args.project and args.source == "step":
+        die(f"--project is for calibration evidence, but --source is 'step' and "
+            f"step {step_n} of '{proj_name}' is open. A step already names its "
+            f"project; letting --project disagree with it would put a step "
+            f"number next to a project that has no such step. Drop --project, "
+            f"or pass --source calibration.")
+    # Calibration runs before new-project, so the project it calibrates for is
+    # not registered yet -- and cross-project evidence is the only thing in the
+    # profile that shows transfer, so it cannot be left attributed to nothing.
+    project = args.project or proj_name
     profile = load_profile()
     try:
         key = knowledge.add_evidence(
             profile, args.concept, args.outcome, args.note,
-            source=args.source, project=proj_name,
+            source=args.source, project=project,
             step=step_n if args.source == "step" else None,
             mode=mode if args.source == "step" else None,
             hints=hints if args.source == "step" else None,
         )
+        knowledge.save(profile)
     except ValueError as e:
         die(str(e))
-    knowledge.save(profile)
     print(f"evidence recorded: {key} = {args.outcome}")
 
 
 def cmd_record_gap(args):
-    state = load()
-    proj_name, step_n, _, _ = _step_context(state)
+    with state_lock(exclusive=False):
+        state = load()
+        proj_name, step_n, _, _ = _step_context(state)
+    if args.project and step_n is not None:
+        die(f"--project is for gaps recorded before a roadmap exists, but step "
+            f"{step_n} of '{proj_name}' is open. A gap carries a step number "
+            f"beside its project, so a --project that disagrees with the open "
+            f"step files it against a project that has no such step. Drop "
+            f"--project, or record it after the step closes.")
+    # Calibration records a gap for every partial and none, and it runs before
+    # new-project, so without this the most common gaps in the file are the ones
+    # attributed to nothing.
+    project = args.project or proj_name
     profile = load_profile()
-    gap_id = knowledge.add_gap(profile, args.concept, args.note,
-                               project=proj_name, step=step_n)
-    knowledge.save(profile)
-    print(f"gap {gap_id} recorded on '{args.concept}'. "
-          f"Being wrong on the record is what the next plan aims at.")
+    try:
+        # add_gap returns the existing id when the same note is still open, so
+        # the id alone does not say whether anything was written. Reporting
+        # "recorded" for a note the profile already held would tell the learner
+        # they had added a second finding they had not.
+        already = {g["id"] for g in knowledge.open_gaps(profile, args.concept)}
+        gap_id = knowledge.add_gap(profile, args.concept, args.note,
+                                   project=project, step=step_n)
+        knowledge.save(profile)
+    except ValueError as e:
+        die(str(e))
+    if gap_id in already:
+        print(f"gap {gap_id} on '{args.concept}' is already open with that note.")
+    else:
+        print(f"gap {gap_id} recorded on '{args.concept}'. "
+              f"Being wrong on the record is what the next plan aims at.")
 
 
 def cmd_resolve_gap(args):
-    state = load()
-    proj_name, step_n, _, _ = _step_context(state)
+    with state_lock(exclusive=False):
+        state = load()
+        proj_name, step_n, _, _ = _step_context(state)
     if step_n is None:
         die("no open step to credit this resolution to. resolve-gap runs while "
             "the step that closed the gap is still open — before complete-step, "
@@ -506,10 +1138,26 @@ def cmd_resolve_gap(args):
     profile = load_profile()
     try:
         knowledge.resolve_gap(profile, args.concept, args.gap, f"{proj_name}/{step_n}")
+        knowledge.save(profile)
     except ValueError as e:
         die(str(e))
-    knowledge.save(profile)
     print(f"gap {args.gap} on '{args.concept}' resolved by {proj_name}/{step_n}")
+
+
+def _best_outcome(evidence: list) -> str:
+    """The strongest outcome a concept ever reached, because every reader of this
+    column is asking "has this been reconciled?" — a later `partial` on one
+    sub-question does not un-demonstrate the mechanism, and showing it would send
+    /bmox:plan back to re-teach ground the profile already covers."""
+    if not evidence:
+        return "-"
+    return min((e["outcome"] for e in evidence), key=knowledge.OUTCOMES.index)
+
+
+def _width(rows, index: int, floor: int = 1) -> int:
+    """Column widths come from the rows being printed, so a long slug or concept
+    name pushes its column out instead of running into the next one."""
+    return max([len(str(row[index])) for row in rows] + [floor])
 
 
 def cmd_profile(args):
@@ -518,49 +1166,74 @@ def cmd_profile(args):
         if not args.concept or not args.alias:
             die("profile alias requires both a concept and an alias. "
                 "Usage: state.py profile alias CONCEPT ALIAS")
-        knowledge.add_alias(profile, args.concept, args.alias)
-        knowledge.save(profile)
-        print(f"'{args.alias}' now resolves to '{knowledge.normalize(args.concept)}'")
+        try:
+            key = knowledge.add_alias(profile, args.concept, args.alias)
+            knowledge.save(profile)
+        except ValueError as e:
+            die(str(e))
+        print(f"'{args.alias}' now resolves to '{key}'")
         return
     concepts = profile.get("concepts", {})
     if not concepts:
         print("profile is empty — /bmox:plan builds it as you go")
         return
-    for key, c in sorted(concepts.items()):
+    rows = []
+    for key, c in sorted(concepts.items(), key=lambda kv: (-len(kv[1]["evidence"]), kv[0])):
         gaps = [g for g in c["open_gaps"] if g["resolved_by"] is None]
         modes = sorted({e["mode"] for e in c["evidence"] if e.get("mode")})
-        print(f"{key:<28} evidence={len(c['evidence'])} "
-              f"modes={','.join(modes) or '-'} open_gaps={len(gaps)}")
+        rows.append((key, _best_outcome(c["evidence"]), len(c["evidence"]),
+                     ",".join(modes) or "-", gaps))
+    w_key, w_outcome, w_count, w_modes = (_width(rows, 0), _width(rows, 1),
+                                          _width(rows, 2), _width(rows, 3))
+    for key, outcome, count, modes, gaps in rows:
+        print(f"{key:<{w_key}} outcome={outcome:<{w_outcome}} "
+              f"evidence={count:<{w_count}} "
+              f"modes={modes:<{w_modes}} open_gaps={len(gaps)}")
         for g in gaps:
             print(f"    gap {g['id']}: {g['note']}")
 
 
 def cmd_status(args):
-    state = load()
+    with state_lock(exclusive=False):
+        state = load()
     profile = load_profile()
     if args.json:
         print(json.dumps({"state": state, "profile": profile}, indent=2))
         return
     cur = state["current"].get("project")
     print(f"current project: {cur or '(none)'}")
+    rows = []
     for name, proj in state["projects"].items():
-        done = sum(1 for s in proj["steps"].values() if s["phase"] == "done")
-        marker = "*" if name == cur else " "
-        print(f"{marker} {name} [{proj['language']}]: {done}/{proj['steps_total']} steps done")
-        print(f"    goal: {proj['goal']}")
-        for key in sorted(proj["steps"], key=lambda k: proj["steps"][k]["number"]):
+        for key in sorted(proj["steps"], key=lambda k: proj["steps"][k].get("number", 0)):
             s = proj["steps"][key]
-            hints = sum(s["hints"].values())
             flags = []
-            if s["reconciled"]:
+            if s.get("reconciled"):
                 flags.append("reconciled")
-            if s["gate_bypassed"]:
+            if s.get("gate_bypassed"):
                 flags.append("GATE BYPASSED")
-            if s["skipped"]:
-                flags.append(f"SKIPPED: {s['skip_reason']}")
-            print(f"    step {s['number']:>2} {s['title']:<26} "
-                  f"{(s['mode'] or '-'):<8} {s['phase']:<10} hints={hints} "
-                  f"{' '.join(flags)}")
+            if s.get("skipped"):
+                at = s.get("abandoned_at")
+                flags.append(f"SKIPPED{f' at {at}' if at else ''}: {s.get('skip_reason')}")
+            rows.append((name, s.get("number"), s.get("title") or "", s.get("mode") or "-",
+                         s.get("phase") or "-", hint_total(s), " ".join(flags)))
+    w_num, w_title = _width(rows, 1), _width(rows, 2)
+    w_mode, w_phase = _width(rows, 3), _width(rows, 4)
+    for name, proj in state["projects"].items():
+        done = sum(1 for s in proj["steps"].values() if s.get("phase") == "done")
+        marker = "*" if name == cur else " "
+        print(f"{marker} {name} [{proj.get('language', '?')}]: "
+              f"{done}/{proj['steps_total']} steps done")
+        print(f"    goal: {proj.get('goal', '(none recorded)')}")
+        for row in [r for r in rows if r[0] == name]:
+            _, number, title, mode, phase, hints, flags = row
+            print(f"    step {number:>{w_num}} {title:<{w_title}} "
+                  f"{mode:<{w_mode}} {phase:<{w_phase}} hints={hints} "
+                  f"{flags}".rstrip())
+    flags = audit_flags(state)
+    if flags:
+        print("audit flags — the record says work happened where no time passed:")
+        for flag in flags:
+            print(f"    {flag}")
     concepts = profile.get("concepts", {})
     if concepts:
         total_gaps = sum(
@@ -579,7 +1252,10 @@ def main():
 
     sp = sub.add_parser("status")
     sp.add_argument("--json", action="store_true")
-    sp.set_defaults(fn=cmd_status)
+    # status and the profile commands take their own locks: they read state.json
+    # and then profile.json, and the state lock has to be released between the
+    # two.
+    sp.set_defaults(fn=cmd_status, locking="self")
 
     sp = sub.add_parser("new-project")
     sp.add_argument("name")
@@ -632,26 +1308,32 @@ def main():
     sp.add_argument("--outcome", choices=knowledge.OUTCOMES, required=True)
     sp.add_argument("--note", required=True)
     sp.add_argument("--source", choices=["step", "calibration"], default="step")
-    sp.set_defaults(fn=cmd_record_evidence)
+    sp.add_argument("--project")
+    sp.set_defaults(fn=cmd_record_evidence, locking="self")
 
     sp = sub.add_parser("record-gap")
     sp.add_argument("--concept", required=True)
     sp.add_argument("--note", required=True)
-    sp.set_defaults(fn=cmd_record_gap)
+    sp.add_argument("--project")
+    sp.set_defaults(fn=cmd_record_gap, locking="self")
 
     sp = sub.add_parser("resolve-gap")
     sp.add_argument("--concept", required=True)
     sp.add_argument("--gap", required=True)
-    sp.set_defaults(fn=cmd_resolve_gap)
+    sp.set_defaults(fn=cmd_resolve_gap, locking="self")
 
     sp = sub.add_parser("profile")
     sp.add_argument("action", choices=["show", "alias"])
     sp.add_argument("concept", nargs="?")
     sp.add_argument("alias", nargs="?")
-    sp.set_defaults(fn=cmd_profile)
+    sp.set_defaults(fn=cmd_profile, locking="self")
 
     args = p.parse_args()
-    args.fn(args)
+    if getattr(args, "locking", None) == "self":
+        args.fn(args)
+        return
+    with state_lock():
+        args.fn(args)
 
 
 if __name__ == "__main__":
