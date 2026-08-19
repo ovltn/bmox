@@ -68,6 +68,8 @@ only when it is bumped.
 4. Commit and push
 
 - **major** — the `.bmox/state.json` schema breaks, or a command is removed or
-  renamed. Also bump `schema_version` and provide a migration.
+  renamed. Also bump `schema_version`. Provide a migration once a released
+  version has users; until then break cleanly, because a migration nobody runs
+  is a second schema to keep correct forever.
 - **minor** — a new skill, command, or `state.py` subcommand.
 - **patch** — prompt wording, documentation, bug fixes.

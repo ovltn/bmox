@@ -9,7 +9,7 @@
     {
       "name": "bmox",
       "source": "./",
-      "description": "Staged learning roadmaps, failing tests per stage, tiered hints, and a script-enforced state lifecycle with an explain-aloud gate.",
+      "description": "Gap-driven learning roadmaps taught by building, tracing the real source, or breaking the real system, gated by a predict-before-you-look state lifecycle.",
       "author": { "name": "ovltn" },
       "license": "MIT",
       "category": "learning",
