@@ -79,6 +79,8 @@ skills/{new,stage,hint,check,status}/SKILL.md
 scripts/state.py                  # state lifecycle enforcer
 references/{contract,curriculum}.md
 assets/templates/project/         # scaffolded into each learning project
+AGENTS.md                         # conventions for changing this repo
+CHANGELOG.md                      # what each release changed
 ```
 
 ## Design notes
@@ -94,14 +96,12 @@ assets/templates/project/         # scaffolded into each learning project
 
 ## Releasing changes
 
-`version` lives **only** in `.claude-plugin/plugin.json` (setting it in
-`marketplace.json` too is a documented footgun — plugin.json silently wins).
-Users receive updates **only when you bump it**, so:
+`version` lives **only** in `.claude-plugin/plugin.json`. Users receive updates
+**only when you bump it**, and pick them up via
+`/plugin marketplace update ovltn-plugins` or auto-update.
 
-1. Make changes, then validate: `claude plugin validate . --strict`
-2. Bump `version` in `.claude-plugin/plugin.json`
-3. Commit, push. Users pick it up via `/plugin marketplace update ovltn-plugins`
-   or auto-update.
+The release procedure and versioning rules are in [AGENTS.md](AGENTS.md); what
+changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Local development
 
